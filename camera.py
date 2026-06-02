@@ -48,6 +48,7 @@ class Camera:
         self._lock = threading.Lock()
         self._jpeg = None        # bytes JPEG frame terbaru (sudah ber-skeleton)
         self._landmarks = None   # list 33 landmark terbaru, atau None
+        self._frame_time = None  # time.monotonic() saat frame di-capture kamera
         self._running = False
         self._thread = None
 
@@ -105,6 +106,10 @@ class Camera:
             if not ok:
                 continue
 
+            # Stempel waktu diambil tepat setelah frame berhasil dibaca dari kamera.
+            # Dipakai analysis.py untuk dt yang akurat (bukan jam loop analisis).
+            capture_time = time.monotonic()
+
             # Cermin (mirror) agar gerakan terasa natural seperti bercermin.
             # MediaPipe jalan di frame cermin ini, sehingga posisi tangan di video
             # cocok dengan posisi target yang ditampilkan.
@@ -126,6 +131,7 @@ class Camera:
             with self._lock:
                 self._jpeg = buf.tobytes()
                 self._landmarks = landmarks
+                self._frame_time = capture_time
 
     # ------------------------------------------------------------------
     def get_jpeg(self):
@@ -133,8 +139,10 @@ class Camera:
             return self._jpeg
 
     def get_landmarks(self):
+        """Kembalikan (landmarks, frame_time) — frame_time adalah time.monotonic()
+        saat frame di-capture. Keduanya None jika kamera belum siap."""
         with self._lock:
-            return self._landmarks
+            return self._landmarks, self._frame_time
 
     def mjpeg_frames(self):
         """Generator untuk endpoint /video_feed (multipart MJPEG)."""

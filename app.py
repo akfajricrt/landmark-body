@@ -34,7 +34,7 @@ sock = Sock(app)
 # ----------------------------------------------------------------------
 analyzer = PunchAnalyzer()
 camera = None  # diinisialisasi di main (impor kamera ditunda)
-ANALYZE_HZ = 15  # game butuh laju lebih tinggi untuk menangkap pukulan cepat
+ANALYZE_HZ = 25  # 25Hz: ~40ms/frame — pukulan cepat (<100ms) tertangkap 2-3× per gerakan
 
 _feedback_lock = threading.Lock()
 _latest_feedback = {
@@ -62,11 +62,26 @@ def _get_feedback():
 
 
 def _analysis_loop():
-    """Thread: analisis landmark terbaru pada laju tetap."""
+    """Thread: analisis landmark terbaru pada laju tetap.
+
+    Hanya analisis frame BARU (frame_time berubah). Frame duplikat dilewati
+    agar kecepatan pergelangan tidak dihitung ulang dengan displacement = 0.
+    """
     period = 1.0 / ANALYZE_HZ
+    last_frame_time = None
     while True:
-        landmarks = camera.get_landmarks() if camera else None
-        fb = analyzer.analyze(landmarks)
+        if camera:
+            landmarks, frame_time = camera.get_landmarks()
+        else:
+            landmarks, frame_time = None, None
+
+        if frame_time is not None and frame_time == last_frame_time:
+            # Frame sama seperti iterasi sebelumnya — skip, jangan analisis ulang.
+            time.sleep(period)
+            continue
+
+        last_frame_time = frame_time
+        fb = analyzer.analyze(landmarks, frame_time=frame_time)
         _set_feedback(fb)
         time.sleep(period)
 
