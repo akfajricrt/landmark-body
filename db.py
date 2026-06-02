@@ -120,3 +120,61 @@ def get_history(limit=20):
     except Exception as e:  # noqa: BLE001
         print(f"[db] Gagal mengambil riwayat: {e}")
         return []
+
+
+def get_settings():
+    """Ambil pengaturan ambang dari baris settings (id=1). Mengembalikan dict
+    {slouch_ratio, close_ratio, tilt_degrees, break_interval} atau None bila
+    DB tak tersedia / baris belum ada. Catatan nama: kolom DB 'close_ratio'
+    dipetakan ke analyzer.too_close_ratio di app.py."""
+    if not _PSYCOPG_OK:
+        return None
+    try:
+        conn = _connect()
+        with conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT slouch_ratio, close_ratio, tilt_degrees, break_interval
+                FROM settings WHERE id = 1
+                """
+            )
+            row = cur.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:  # noqa: BLE001
+        print(f"[db] Gagal mengambil settings: {e}")
+        return None
+
+
+def save_settings(settings):
+    """Simpan (upsert) pengaturan ke baris settings (id=1). `settings` adalah
+    dict dengan kunci slouch_ratio, close_ratio, tilt_degrees, break_interval.
+    Mengembalikan True bila tersimpan, False bila gagal/DB tak tersedia."""
+    if not _PSYCOPG_OK:
+        return False
+    try:
+        conn = _connect()
+        with conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO settings
+                    (id, slouch_ratio, close_ratio, tilt_degrees, break_interval)
+                VALUES (1, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    slouch_ratio   = EXCLUDED.slouch_ratio,
+                    close_ratio    = EXCLUDED.close_ratio,
+                    tilt_degrees   = EXCLUDED.tilt_degrees,
+                    break_interval = EXCLUDED.break_interval
+                """,
+                (
+                    settings.get("slouch_ratio"),
+                    settings.get("close_ratio"),
+                    settings.get("tilt_degrees"),
+                    settings.get("break_interval"),
+                ),
+            )
+        conn.close()
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[db] Gagal menyimpan settings: {e}")
+        return False

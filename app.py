@@ -136,31 +136,39 @@ def api_history():
     return jsonify(db.get_history(limit=20))
 
 
+def _settings_dict():
+    """Pengaturan saat ini dalam bentuk dict berkunci-DB (close_ratio, bukan
+    too_close_ratio) — dipakai untuk respons API & penyimpanan ke PostgreSQL."""
+    return {
+        "slouch_ratio": analyzer.slouch_ratio,
+        "close_ratio": analyzer.too_close_ratio,   # pemetaan nama §7
+        "tilt_degrees": analyzer.tilt_degrees,
+        "break_interval": analyzer.break_interval,
+    }
+
+
+def _apply_settings(d):
+    """Terapkan dict berkunci-DB ke analyzer (abaikan kunci yang None/absen)."""
+    if not d:
+        return
+    if d.get("slouch_ratio") is not None:
+        analyzer.slouch_ratio = float(d["slouch_ratio"])
+    if d.get("close_ratio") is not None:
+        analyzer.too_close_ratio = float(d["close_ratio"])
+    if d.get("tilt_degrees") is not None:
+        analyzer.tilt_degrees = float(d["tilt_degrees"])
+    if d.get("break_interval") is not None:
+        analyzer.break_interval = int(d["break_interval"])
+
+
 @app.route("/api/settings", methods=["GET", "PUT"])
 def api_settings():
     if request.method == "GET":
-        return jsonify({
-            "slouch_ratio": analyzer.slouch_ratio,
-            "close_ratio": analyzer.too_close_ratio,
-            "tilt_degrees": analyzer.tilt_degrees,
-            "break_interval": analyzer.break_interval,
-        })
-    # PUT — perbarui ambang yang dikirim (validasi ringan).
-    data = request.get_json(silent=True) or {}
-    if "slouch_ratio" in data:
-        analyzer.slouch_ratio = float(data["slouch_ratio"])
-    if "close_ratio" in data:
-        analyzer.too_close_ratio = float(data["close_ratio"])
-    if "tilt_degrees" in data:
-        analyzer.tilt_degrees = float(data["tilt_degrees"])
-    if "break_interval" in data:
-        analyzer.break_interval = int(data["break_interval"])
-    return jsonify({
-        "slouch_ratio": analyzer.slouch_ratio,
-        "close_ratio": analyzer.too_close_ratio,
-        "tilt_degrees": analyzer.tilt_degrees,
-        "break_interval": analyzer.break_interval,
-    })
+        return jsonify(_settings_dict())
+    # PUT — terapkan ambang yang dikirim, lalu simpan ke PostgreSQL.
+    _apply_settings(request.get_json(silent=True) or {})
+    saved = db.save_settings(_settings_dict())
+    return jsonify({**_settings_dict(), "saved": saved})
 
 
 # ----------------------------------------------------------------------
@@ -176,9 +184,14 @@ def main():
 
     if db.is_available():
         print("[app] PostgreSQL terhubung — riwayat sesi akan disimpan.")
+        # Muat ambang tersimpan (F11) bila ada, agar persisten antar-restart.
+        saved = db.get_settings()
+        if saved:
+            _apply_settings(saved)
+            print(f"[app] Pengaturan ambang dimuat dari DB: {saved}")
     else:
         print("[app] PostgreSQL TIDAK tersedia — aplikasi tetap jalan, "
-              "riwayat tidak tersimpan.")
+              "riwayat & pengaturan tidak tersimpan.")
 
     # threaded=True agar /video_feed, /ws, dan /api/* bisa dilayani bersamaan.
     app.run(host="0.0.0.0", port=5000, threaded=True)

@@ -35,10 +35,11 @@ Browser hanya menampilkan `<img src="/video_feed">` + update via WebSocket.
 | Berkas | Peran |
 |--------|-------|
 | `analysis.py` | `PostureAnalyzer` — kalibrasi, deteksi, smoothing, skor, timer 20-20-20. Punya self-test. |
-| `camera.py` | Akuisisi kamera + MediaPipe Pose, gambar skeleton, sediakan frame & landmark. |
+| `camera.py` | Akuisisi kamera + MediaPipe **Pose Landmarker (Tasks API)**, gambar skeleton, sediakan frame & landmark. |
 | `app.py` | Entrypoint Flask: `/`, `/video_feed`, `/ws`, `/api/*`, loop analisis. |
-| `db.py` | Koneksi PostgreSQL: simpan & ambil riwayat sesi (tahan-gagal). |
-| `schema.sql` | DDL tabel `sessions` (+ `settings` opsional). |
+| `db.py` | Koneksi PostgreSQL: riwayat sesi + pengaturan ambang (tahan-gagal). |
+| `schema.sql` | DDL tabel `sessions` & `settings`. |
+| `models/pose_landmarker_lite.task` | Model MediaPipe Pose (lite, ~5,5 MB). Disertakan agar jalan offline. |
 | `templates/index.html`, `static/app.js`, `static/style.css` | UI (live view, status, statistik, riwayat). |
 
 ---
