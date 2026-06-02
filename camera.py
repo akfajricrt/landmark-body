@@ -1,19 +1,3 @@
-"""
-camera.py — Akuisisi kamera + MediaPipe Pose Landmarker (Tasks API).
-
-Memakai **MediaPipe Tasks** (`PoseLandmarker`, model *lite*, mode VIDEO) sesuai
-CLAUDE.md §3 — bukan Solutions API lama. Loop di thread latar: baca frame
-(OpenCV) → deteksi pose (CPU) → gambar skeleton → simpan JPEG + landmark
-terbaru. app.py mengambil keduanya lewat get_jpeg() dan get_landmarks().
-
-Catatan desain (CLAUDE.md §2): modul ini HANYA mengurus visi. Seluruh
-keputusan postur ada di analysis.py. Landmark Tasks API punya atribut
-.x/.y/.z/.visibility sehingga kompatibel dengan analysis.py tanpa perubahan.
-
-Privasi (CLAUDE.md §10): frame TIDAK pernah ditulis ke disk/dikirim ke luar;
-hanya disediakan sebagai MJPEG ke jaringan lokal oleh Flask.
-"""
-
 import os
 import threading
 import time
@@ -121,8 +105,9 @@ class Camera:
             if not ok:
                 continue
 
-            # Cermin (mirror) agar gerakan terasa natural. Fitur analisis simetris,
-            # jadi pencerminan tidak mengubah hasil.
+            # Cermin (mirror) agar gerakan terasa natural seperti bercermin.
+            # MediaPipe jalan di frame cermin ini, sehingga posisi tangan di video
+            # cocok dengan posisi target yang ditampilkan.
             frame = cv2.flip(frame, 1)
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

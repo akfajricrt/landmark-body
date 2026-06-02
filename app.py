@@ -1,49 +1,50 @@
 """
-app.py — Entrypoint Flask Study Guardian (arsitektur monolitik, CLAUDE.md §2).
+app.py — Entrypoint Flask Study Guardian (Punch Trainer — game latihan tinju).
 
-Satu proses menangani semuanya:
-  GET  /              -> index.html (UI HTML/JS)
-  GET  /video_feed    -> MJPEG (frame + skeleton)
-  WS   /ws            -> dorong feedback tiap analisis (kontrak §5)
-  POST /api/calibrate -> set baseline dari frame saat ini
-  POST /api/session/end -> tutup sesi & simpan ke PostgreSQL
-  GET  /api/history   -> daftar sesi terakhir
-  GET/PUT /api/settings -> baca/ubah ambang (F11, opsional)
+Arsitektur monolitik: satu proses menangani semuanya.
+  GET  /                 -> index.html (UI HTML/JS)
+  GET  /video_feed       -> MJPEG (frame + skeleton)
+  WS   /ws               -> dorong feedback game tiap analisis
+  POST /api/calibrate    -> kalibrasi jangkauan dari frame saat ini
+  POST /api/session/end  -> tutup sesi & simpan ke PostgreSQL
+  GET  /api/history      -> daftar sesi terakhir
+  GET/PUT /api/settings  -> baca/ubah ambang game (disimpan ke DB)
 
-Loop analisis berjalan di thread sendiri (~10 Hz): mengambil landmark dari
-camera.py, memanggil PostureAnalyzer.analyze(), menyimpan feedback terbaru
-yang lalu didorong ke semua klien WebSocket.
+Loop analisis berjalan di thread sendiri (~15 Hz): mengambil landmark dari
+camera.py, memanggil PunchAnalyzer.analyze(), menyimpan feedback terbaru yang
+lalu didorong ke semua klien WebSocket.
 """
 
 import json
 import os
 import threading
 import time
-from datetime import datetime, timezone
 
 from flask import Flask, Response, jsonify, render_template, request
 from flask_sock import Sock
 
 import db
-from analysis import PostureAnalyzer
+from analysis import PunchAnalyzer
 
 app = Flask(__name__)
 sock = Sock(app)
 
 # ----------------------------------------------------------------------
-# State global (satu pengguna lokal — lihat PRD §3 "Bukan Tujuan").
+# State global (satu pemain lokal).
 # ----------------------------------------------------------------------
-analyzer = PostureAnalyzer()
-camera = None  # diinisialisasi di main (impor kamera ditunda agar app bisa diuji)
-ANALYZE_HZ = 10
+analyzer = PunchAnalyzer()
+camera = None  # diinisialisasi di main (impor kamera ditunda)
+ANALYZE_HZ = 15  # game butuh laju lebih tinggi untuk menangkap pukulan cepat
 
 _feedback_lock = threading.Lock()
 _latest_feedback = {
     "type": "feedback",
-    "status": "need_calibration",
-    "metrics": None,
-    "flags": {"slouching": False, "too_close": False, "tilted": False,
-              "break_due": False},
+    "status": "idle",
+    "metrics": {"left": {"ext": None, "speed": None},
+                "right": {"ext": None, "speed": None}},
+    "target": None,
+    "last_event": {"seq": 0, "type": "none", "hand": None,
+                   "combo": 0, "speed": 0.0, "reaction_ms": 0},
     "alerts": ["Menunggu kamera…"],
     "stats": analyzer.stats.to_dict(),
 }
@@ -97,75 +98,53 @@ def ws(ws):
         while True:
             ws.send(json.dumps(_get_feedback()))
             time.sleep(1.0 / ANALYZE_HZ)
-    except Exception:  # noqa: BLE001 — klien putus koneksi; akhiri loop dengan tenang
+    except Exception:  # noqa: BLE001 — klien putus koneksi; akhiri dengan tenang
         return
 
 
 # ----------------------------------------------------------------------
-# REST API (kontrak §5)
+# REST API
 # ----------------------------------------------------------------------
-@app.route("/api/calibrate", methods=["POST"])
-def api_calibrate():
-    landmarks = camera.get_landmarks() if camera else None
-    baseline = analyzer.calibrate(landmarks)
-    if baseline is None:
-        return jsonify({
-            "error": "Pose tidak terdeteksi. Pastikan wajah & bahu terlihat, "
-                     "lalu coba lagi."
-        }), 400
-    return jsonify({"baseline": baseline})
+@app.route("/api/play", methods=["POST"])
+def api_play():
+    # Tombol Play: langsung mulai bermain (tanpa kalibrasi).
+    analyzer.start()
+    return jsonify({"ok": True})
 
 
-@app.route("/api/session/end", methods=["POST"])
-def api_session_end():
-    stats = analyzer.stats.to_dict()
-    started_at = analyzer.started_at
-    ended_at = datetime.now(timezone.utc)
-    session_id = db.save_session(started_at, ended_at, stats)
-    # Mulai sesi baru (baseline kalibrasi dipertahankan).
-    analyzer.reset()
-    return jsonify({
-        "saved": session_id is not None,
-        "session_id": session_id,
-        "summary": stats,
-    })
-
-
-@app.route("/api/history")
-def api_history():
-    return jsonify(db.get_history(limit=20))
+@app.route("/api/stop", methods=["POST"])
+def api_stop():
+    # Tombol Stop: hentikan permainan. TIDAK menyimpan riwayat.
+    summary = analyzer.stats.to_dict()
+    analyzer.stop()
+    return jsonify({"ok": True, "summary": summary})
 
 
 def _settings_dict():
-    """Pengaturan saat ini dalam bentuk dict berkunci-DB (close_ratio, bukan
-    too_close_ratio) — dipakai untuk respons API & penyimpanan ke PostgreSQL."""
+    """Pengaturan saat ini (kunci sesuai kolom DB)."""
     return {
-        "slouch_ratio": analyzer.slouch_ratio,
-        "close_ratio": analyzer.too_close_ratio,   # pemetaan nama §7
-        "tilt_degrees": analyzer.tilt_degrees,
-        "break_interval": analyzer.break_interval,
+        "speed_min": analyzer.speed_min,
+        "extend_frac": analyzer.extend_frac,
+        "target_radius": analyzer.target_radius,
     }
 
 
 def _apply_settings(d):
-    """Terapkan dict berkunci-DB ke analyzer (abaikan kunci yang None/absen)."""
+    """Terapkan dict pengaturan ke analyzer (abaikan kunci None/absen)."""
     if not d:
         return
-    if d.get("slouch_ratio") is not None:
-        analyzer.slouch_ratio = float(d["slouch_ratio"])
-    if d.get("close_ratio") is not None:
-        analyzer.too_close_ratio = float(d["close_ratio"])
-    if d.get("tilt_degrees") is not None:
-        analyzer.tilt_degrees = float(d["tilt_degrees"])
-    if d.get("break_interval") is not None:
-        analyzer.break_interval = int(d["break_interval"])
+    if d.get("speed_min") is not None:
+        analyzer.speed_min = float(d["speed_min"])
+    if d.get("extend_frac") is not None:
+        analyzer.extend_frac = float(d["extend_frac"])
+    if d.get("target_radius") is not None:
+        analyzer.target_radius = float(d["target_radius"])
 
 
 @app.route("/api/settings", methods=["GET", "PUT"])
 def api_settings():
     if request.method == "GET":
         return jsonify(_settings_dict())
-    # PUT — terapkan ambang yang dikirim, lalu simpan ke PostgreSQL.
     _apply_settings(request.get_json(silent=True) or {})
     saved = db.save_settings(_settings_dict())
     return jsonify({**_settings_dict(), "saved": saved})
@@ -184,16 +163,15 @@ def main():
 
     if db.is_available():
         print("[app] PostgreSQL terhubung — riwayat sesi akan disimpan.")
-        # Muat ambang tersimpan (F11) bila ada, agar persisten antar-restart.
         saved = db.get_settings()
         if saved:
             _apply_settings(saved)
-            print(f"[app] Pengaturan ambang dimuat dari DB: {saved}")
+            print(f"[app] Pengaturan game dimuat dari DB: {saved}")
     else:
         print("[app] PostgreSQL TIDAK tersedia — aplikasi tetap jalan, "
               "riwayat & pengaturan tidak tersimpan.")
 
-    # threaded=True agar /video_feed, /ws, dan /api/* bisa dilayani bersamaan.
+    # threaded=True agar /video_feed, /ws, dan /api/* dilayani bersamaan.
     app.run(host="0.0.0.0", port=5000, threaded=True)
 
 

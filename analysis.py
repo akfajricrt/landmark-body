@@ -1,164 +1,195 @@
 """
-analysis.py — Inti logika analisis postur Study Guardian.
+analysis.py — Inti logika game latihan tinju Study Guardian (Punch Trainer).
 
 Modul ini MURNI Python (tanpa OpenCV / MediaPipe) supaya bisa diuji tanpa
-kamera (lihat blok __main__ di bawah). Seluruh keputusan postur — apakah
-membungkuk, terlalu dekat, miring, kapan istirahat, dan skor — terjadi di
-sini, BUKAN di browser (lihat CLAUDE.md §2).
+kamera (lihat blok __main__ di bawah). Seluruh keputusan game — apakah sebuah
+gerakan dianggap pukulan sah, apakah mengenai target, skor & kombo — terjadi di
+sini, BUKAN di browser.
 
-Sumber kebenaran rumus & ambang: CLAUDE.md §6 dan PRD §12.
-Jangan mengubah rumus tanpa menyamakan kedua dokumen tersebut.
+Mode: "Target Reaksi" — sebuah target menyala di salah satu zona; pemain harus
+"meninju" ke zona itu. Pukulan hanya dihitung bila: (1) cukup CEPAT,
+(2) lengan TER-EKSTENSI cukup (relatif jangkauan default), dan (3) mendarat di
+zona target yang aktif.
+
+Tanpa kalibrasi manual: tekan Play → langsung main. Jangkauan memakai nilai
+default universal (dinormalisasi lebar bahu, jadi adil untuk semua ukuran badan).
 """
 
 import math
+import random
 import time
 from collections import deque
 from datetime import datetime, timezone
 
 # --------------------------------------------------------------------------
-# Ambang & konstanta (HARUS sama dengan CLAUDE.md §6 / PRD §12)
+# Ambang & konstanta game (boleh diubah lewat /api/settings)
 # --------------------------------------------------------------------------
-SLOUCH_RATIO = 0.82        # membungkuk bila head_ratio < 82% baseline
-TOO_CLOSE_RATIO = 1.22     # terlalu dekat bila eye_width > 122% baseline
-TILT_DEGREES = 9.0         # miring bila tilt_deg > 9°
-SMOOTH_WINDOW = 8          # moving average antar-frame
-BREAK_INTERVAL_SEC = 1200  # 20 menit (kecilkan saat demo)
-
-VISIBILITY_THRESHOLD = 0.5  # landmark dianggap valid bila visibility >= ini
+PUNCH_SPEED_MIN = 1.5      # kecepatan pergelangan minimal (unit-layar/detik)
+PUNCH_EXTEND_FRAC = 0.70   # pukulan sah bila ekstensi >= 70% jangkauan default
+REARM_FRAC = 0.55          # harus menarik tangan < 55% jangkauan untuk "isi ulang"
+SPEED_SMOOTH = 3           # smoothing ringan untuk kecepatan (jangan terlalu besar)
+DEFAULT_REACH = 1.5        # jangkauan default (extension penuh ≈ 1,5× lebar bahu)
+TARGET_RADIUS = 0.18       # radius zona target (koordinat ternormalisasi)
+SCORE_BASE = 100           # poin dasar per hit (dikali kombo)
+ASSUMED_SHOULDER_M = 0.40  # asumsi lebar bahu (m) untuk estimasi kecepatan m/s
 
 # --------------------------------------------------------------------------
-# Indeks landmark MediaPipe Pose yang dipakai (CLAUDE.md §6)
+# Indeks landmark MediaPipe Pose yang dipakai (tubuh bagian atas)
 # Koordinat ternormalisasi 0..1, sumbu Y ke bawah.
 # --------------------------------------------------------------------------
-NOSE = 0
-LEFT_EYE = 2
-RIGHT_EYE = 5
-LEFT_EAR = 7
-RIGHT_EAR = 8
 LEFT_SHOULDER = 11
 RIGHT_SHOULDER = 12
+LEFT_ELBOW = 13
+RIGHT_ELBOW = 14
+LEFT_WRIST = 15
+RIGHT_WRIST = 16
 
-# Landmark yang wajib terlihat agar analisis valid
-REQUIRED_LANDMARKS = (LEFT_EYE, RIGHT_EYE, LEFT_SHOULDER, RIGHT_SHOULDER)
+HANDS = {
+    "left": (LEFT_SHOULDER, LEFT_WRIST),
+    "right": (RIGHT_SHOULDER, RIGHT_WRIST),
+}
+VISIBILITY_THRESHOLD = 0.5
 
-# Teks peringatan yang terlihat user (Bahasa Indonesia, lihat CLAUDE.md §10)
-ALERT_SLOUCH = "Punggung membungkuk — tegakkan badan."
-ALERT_TOO_CLOSE = "Wajah terlalu dekat ke layar — mundur sedikit."
-ALERT_TILTED = "Badan miring — luruskan bahu."
-ALERT_BREAK = "Saatnya istirahat 20-20-20 — lihat objek jauh selama 20 detik."
-ALERT_NO_POSE = "Pose tidak terdeteksi — pastikan tubuh bagian atas terlihat kamera."
-ALERT_NEED_CALIB = "Silakan kalibrasi: duduk tegak lalu tekan Kalibrasi."
+# Zona target (pusat ternormalisasi, dalam ruang gambar yang ditampilkan/mirror)
+ZONES = [
+    {"id": "TL", "x": 0.30, "y": 0.35},
+    {"id": "TR", "x": 0.70, "y": 0.35},
+    {"id": "ML", "x": 0.25, "y": 0.55},
+    {"id": "MR", "x": 0.75, "y": 0.55},
+    {"id": "C",  "x": 0.50, "y": 0.45},
+]
 
-
-def _extract_features(landmarks):
-    """Hitung tiga fitur turunan dari landmark. Mengembalikan
-    (head_ratio, eye_width, tilt_deg) atau None bila tak bisa dihitung."""
-    le, re = landmarks[LEFT_EYE], landmarks[RIGHT_EYE]
-    ls, rs = landmarks[LEFT_SHOULDER], landmarks[RIGHT_SHOULDER]
-
-    shoulder_width = math.hypot(ls.x - rs.x, ls.y - rs.y)
-    if shoulder_width < 1e-6:
-        return None
-
-    eye_mid_y = (le.y + re.y) / 2.0
-    shoulder_mid_y = (ls.y + rs.y) / 2.0
-
-    # a. Rasio tinggi kepala — dinormalisasi terhadap lebar bahu agar tidak
-    #    terpengaruh jarak user ke kamera. Kecil = membungkuk.
-    head_ratio = (shoulder_mid_y - eye_mid_y) / shoulder_width
-
-    # b. Lebar antar-mata — SENGAJA tidak dinormalisasi. Besar = terlalu dekat.
-    eye_width = math.hypot(le.x - re.x, le.y - re.y)
-
-    # c. Kemiringan garis bahu terhadap horizontal via atan2. Besar = miring.
-    tilt_deg = abs(math.degrees(math.atan2(rs.y - ls.y, rs.x - ls.x)))
-    if tilt_deg > 90.0:
-        tilt_deg = 180.0 - tilt_deg  # lipat ke rentang 0..90
-
-    return head_ratio, eye_width, tilt_deg
+# Teks yang terlihat user (Bahasa Indonesia)
+ALERT_PRESS_PLAY = "Tekan ▶ Play untuk mulai bertanding."
+ALERT_NO_POSE = "Tubuh tidak terdeteksi — mundur agar bahu & tangan terlihat kamera."
 
 
-class PostureStats:
-    """Statistik sesi berjalan. Catatan pemetaan nama: di sini event
-    'terlalu dekat' disimpan sebagai too_close_events, tetapi to_dict()
-    mengeluarkannya sebagai 'close_events' sesuai kontrak §5/§7."""
+def _dist(a, b):
+    return math.hypot(a.x - b.x, a.y - b.y)
+
+
+class PunchStats:
+    """Statistik sesi latihan berjalan."""
 
     def __init__(self):
         self.reset()
 
     def reset(self):
         self._start = time.monotonic()
-        self.total_frames = 0
-        self.good_frames = 0
-        self.slouch_events = 0
-        self.too_close_events = 0
-        self.tilt_events = 0
+        self.score = 0
+        self.combo = 0
+        self.best_combo = 0
+        self.punches = 0          # total pukulan sah dilempar
+        self.hits = 0             # pukulan yang kena target
+        self._speeds = []         # m/s (estimasi) tiap pukulan
+        self._reactions = []      # ms, hanya untuk hit
 
     @property
     def elapsed_sec(self):
         return int(time.monotonic() - self._start)
 
     @property
-    def posture_score(self):
-        # Skor = persentase frame ber-postur baik. Default 100 saat belum ada data.
-        if self.total_frames == 0:
-            return 100
-        return round(100 * self.good_frames / self.total_frames)
+    def accuracy(self):
+        return round(100 * self.hits / self.punches) if self.punches else 0
+
+    @property
+    def avg_speed(self):
+        return round(sum(self._speeds) / len(self._speeds), 1) if self._speeds else 0.0
+
+    @property
+    def best_speed(self):
+        return round(max(self._speeds), 1) if self._speeds else 0.0
+
+    @property
+    def last_reaction_ms(self):
+        return self._reactions[-1] if self._reactions else 0
+
+    @property
+    def avg_reaction_ms(self):
+        return round(sum(self._reactions) / len(self._reactions)) if self._reactions else 0
 
     def to_dict(self):
         return {
             "elapsed_sec": self.elapsed_sec,
-            "posture_score": self.posture_score,
-            "slouch_events": self.slouch_events,
-            "close_events": self.too_close_events,  # pemetaan nama → §5/§7
-            "tilt_events": self.tilt_events,
+            "score": self.score,
+            "combo": self.combo,
+            "best_combo": self.best_combo,
+            "punches": self.punches,
+            "hits": self.hits,
+            "accuracy": self.accuracy,
+            "avg_speed": self.avg_speed,
+            "best_speed": self.best_speed,
+            "last_reaction_ms": self.last_reaction_ms,
+            "avg_reaction_ms": self.avg_reaction_ms,
         }
 
 
-class PostureAnalyzer:
-    """Menerima landmark pose tiap frame, menghasilkan objek feedback sesuai
-    kontrak WebSocket (CLAUDE.md §5). Menyimpan baseline kalibrasi, melakukan
-    smoothing, menghitung event & skor, serta menjalankan timer 20-20-20."""
+class PunchAnalyzer:
+    """Menerima landmark pose tiap frame; mendeteksi pukulan sah, mengelola
+    target & skor, lalu menghasilkan objek feedback untuk WebSocket.
+
+    Tidak butuh kalibrasi manual: panggil start() (tombol Play) untuk mulai;
+    jangkauan memakai DEFAULT_REACH yang dinormalisasi lebar bahu."""
 
     def __init__(self):
-        # Ambang per-instance agar bisa diubah lewat /api/settings (F11)
-        self.slouch_ratio = SLOUCH_RATIO
-        self.too_close_ratio = TOO_CLOSE_RATIO
-        self.tilt_degrees = TILT_DEGREES
-        self.break_interval = BREAK_INTERVAL_SEC
+        # Ambang per-instance (bisa diubah lewat /api/settings)
+        self.speed_min = PUNCH_SPEED_MIN
+        self.extend_frac = PUNCH_EXTEND_FRAC
+        self.target_radius = TARGET_RADIUS
 
-        self._hr = deque(maxlen=SMOOTH_WINDOW)
-        self._ew = deque(maxlen=SMOOTH_WINDOW)
-        self._td = deque(maxlen=SMOOTH_WINDOW)
-
-        self.baseline = None  # {"head_ratio": .., "eye_width": ..}
-        self.stats = PostureStats()
-        self._prev_flags = {"slouching": False, "too_close": False, "tilted": False}
-        self._last_break = time.monotonic()
+        self.full_reach = {"left": DEFAULT_REACH, "right": DEFAULT_REACH}
+        self.stats = PunchStats()
         self.started_at = datetime.now(timezone.utc)
+        self.playing = False
+
+        self._armed = {"left": True, "right": True}
+        self._prev_wrist = {"left": None, "right": None}
+        self._speed_buf = {"left": deque(maxlen=SPEED_SMOOTH),
+                           "right": deque(maxlen=SPEED_SMOOTH)}
+        self._last_time = time.monotonic()
+
+        self.active_target = None
+        self._target_spawn = 0.0
+        self._event_seq = 0
+        self._last_event = self._no_event()
 
     # ------------------------------------------------------------------
-    @property
-    def calibrated(self):
-        return self.baseline is not None
+    @staticmethod
+    def _no_event():
+        return {"seq": 0, "type": "none", "hand": None,
+                "combo": 0, "speed": 0.0, "reaction_ms": 0}
 
-    def reset(self):
-        """Mulai sesi baru. Baseline kalibrasi dipertahankan (tidak perlu
-        kalibrasi ulang antar-sesi); hanya statistik & timer di-reset."""
+    def _reset_runtime(self):
         self.stats.reset()
-        self._hr.clear()
-        self._ew.clear()
-        self._td.clear()
-        self._prev_flags = {"slouching": False, "too_close": False, "tilted": False}
-        self._last_break = time.monotonic()
         self.started_at = datetime.now(timezone.utc)
+        self._armed = {"left": True, "right": True}
+        self._prev_wrist = {"left": None, "right": None}
+        self._speed_buf = {"left": deque(maxlen=SPEED_SMOOTH),
+                           "right": deque(maxlen=SPEED_SMOOTH)}
+        self._last_time = time.monotonic()
+        self.active_target = None
+        self._event_seq = 0
+        self._last_event = self._no_event()
+
+    def start(self):
+        """Mulai bermain (tombol Play). Reset statistik & langsung munculkan
+        target — tanpa kalibrasi. Selalu berhasil."""
+        self._reset_runtime()
+        self.playing = True
+        self._spawn_target()
+        return True
+
+    def stop(self):
+        """Hentikan permainan (tombol Stop). Tidak menyimpan apa pun."""
+        self.playing = False
+        self.active_target = None
 
     # ------------------------------------------------------------------
-    def _is_valid(self, landmarks):
+    def _visible(self, landmarks, idx_iterable):
         if landmarks is None:
             return False
         try:
-            for i in REQUIRED_LANDMARKS:
+            for i in idx_iterable:
                 vis = getattr(landmarks[i], "visibility", 1.0)
                 if vis is not None and vis < VISIBILITY_THRESHOLD:
                     return False
@@ -166,230 +197,223 @@ class PostureAnalyzer:
             return False
         return True
 
-    def _smoothed(self):
-        return (
-            sum(self._hr) / len(self._hr),
-            sum(self._ew) / len(self._ew),
-            sum(self._td) / len(self._td),
-        )
+    def _extension(self, landmarks, hand, shoulder_width):
+        sh_idx, wr_idx = HANDS[hand]
+        if not self._visible(landmarks, (sh_idx, wr_idx)):
+            return None
+        return _dist(landmarks[wr_idx], landmarks[sh_idx]) / shoulder_width, landmarks[wr_idx]
 
-    def _count_events(self, slouching, too_close, tilted):
-        # Event dihitung hanya pada transisi baik -> buruk (PRD §12).
-        if slouching and not self._prev_flags["slouching"]:
-            self.stats.slouch_events += 1
-        if too_close and not self._prev_flags["too_close"]:
-            self.stats.too_close_events += 1
-        if tilted and not self._prev_flags["tilted"]:
-            self.stats.tilt_events += 1
-        self._prev_flags = {
-            "slouching": slouching,
-            "too_close": too_close,
-            "tilted": tilted,
+    def _spawn_target(self):
+        choices = [z for z in ZONES if not self.active_target
+                   or z["id"] != self.active_target["id"]]
+        z = random.choice(choices)
+        self.active_target = {"id": z["id"], "x": z["x"], "y": z["y"],
+                              "r": self.target_radius}
+        self._target_spawn = time.monotonic()
+
+    def _register_event(self, etype, hand, speed_ms, reaction_ms):
+        self._event_seq += 1
+        self._last_event = {
+            "seq": self._event_seq, "type": etype, "hand": hand,
+            "combo": self.stats.combo, "speed": round(speed_ms, 1),
+            "reaction_ms": reaction_ms,
         }
 
-    def _feedback(self, status, metrics, flags, alerts):
+    # ------------------------------------------------------------------
+    def analyze(self, landmarks):
+        """Analisis satu frame → objek feedback."""
+        now = time.monotonic()
+        dt = min(max(now - self._last_time, 0.02), 0.2)  # clamp agar speed stabil
+        self._last_time = now
+
+        empty_metrics = {"left": {"ext": None, "speed": None},
+                         "right": {"ext": None, "speed": None}}
+
+        # Belum/berhenti bermain → tampilkan ajakan tekan Play.
+        if not self.playing:
+            return self._feedback("idle", empty_metrics, [ALERT_PRESS_PLAY])
+
+        # Bermain tapi tubuh tak terlihat.
+        if not self._visible(landmarks, (LEFT_SHOULDER, RIGHT_SHOULDER)):
+            return self._feedback("playing", empty_metrics, [ALERT_NO_POSE])
+
+        shoulder_width = _dist(landmarks[LEFT_SHOULDER], landmarks[RIGHT_SHOULDER])
+        if shoulder_width < 1e-6:
+            return self._feedback("playing", empty_metrics, [ALERT_NO_POSE])
+
+        m_per_norm = ASSUMED_SHOULDER_M / shoulder_width
+        metrics = {}
+        punch = None  # (hand, wrist, speed_ms) pukulan sah pada frame ini
+
+        for hand in HANDS:
+            res = self._extension(landmarks, hand, shoulder_width)
+            if res is None:
+                metrics[hand] = {"ext": None, "speed": None}
+                self._prev_wrist[hand] = None
+                continue
+            ext, wrist = res
+
+            prev = self._prev_wrist[hand]
+            raw_speed = (_dist(wrist, prev) / dt) if prev is not None else 0.0
+            self._prev_wrist[hand] = wrist
+            self._speed_buf[hand].append(raw_speed)
+            speed = sum(self._speed_buf[hand]) / len(self._speed_buf[hand])
+            speed_ms = speed * m_per_norm
+
+            metrics[hand] = {"ext": round(ext, 2), "speed": round(speed_ms, 1)}
+
+            reach = self.full_reach[hand]
+            if ext < REARM_FRAC * reach:          # isi ulang saat tangan ditarik
+                self._armed[hand] = True
+
+            if (self._armed[hand] and ext >= self.extend_frac * reach
+                    and speed >= self.speed_min):
+                self._armed[hand] = False
+                if punch is None or speed_ms > punch[2]:
+                    punch = (hand, wrist, speed_ms)
+
+        if self.active_target is None:
+            self._spawn_target()
+
+        if punch is not None:
+            hand, wrist, speed_ms = punch
+            self.stats.punches += 1
+            self.stats._speeds.append(speed_ms)
+            tx, ty = self.active_target["x"], self.active_target["y"]
+            hit = math.hypot(wrist.x - tx, wrist.y - ty) <= self.active_target["r"]
+            if hit:
+                reaction_ms = int((now - self._target_spawn) * 1000)
+                self.stats.combo += 1
+                self.stats.best_combo = max(self.stats.best_combo, self.stats.combo)
+                self.stats.score += SCORE_BASE * self.stats.combo
+                self.stats.hits += 1
+                self.stats._reactions.append(reaction_ms)
+                self._register_event("hit", hand, speed_ms, reaction_ms)
+                self._spawn_target()
+            else:
+                self.stats.combo = 0
+                self._register_event("miss", hand, speed_ms, 0)
+
+        return self._feedback("playing", metrics, [])
+
+    # ------------------------------------------------------------------
+    def _feedback(self, status, metrics, alerts):
         return {
             "type": "feedback",
             "status": status,
             "metrics": metrics,
-            "flags": flags,
+            "target": self.active_target,
+            "last_event": self._last_event,
             "alerts": alerts,
             "stats": self.stats.to_dict(),
         }
 
-    # ------------------------------------------------------------------
-    def calibrate(self, landmarks):
-        """Tetapkan baseline dari frame saat ini. Mengembalikan dict baseline
-        {"head_ratio", "eye_width"} atau None bila pose tak valid."""
-        if not self._is_valid(landmarks):
-            return None
-        feats = _extract_features(landmarks)
-        if feats is None:
-            return None
-        hr, ew, _ = feats
-        self.baseline = {"head_ratio": round(hr, 4), "eye_width": round(ew, 4)}
-        # Mulai bersih setelah kalibrasi agar smoothing & event tidak tercampur.
-        self._hr.clear()
-        self._ew.clear()
-        self._td.clear()
-        self._prev_flags = {"slouching": False, "too_close": False, "tilted": False}
-        return self.baseline
-
-    def analyze(self, landmarks):
-        """Analisis satu frame → objek feedback sesuai kontrak §5."""
-        # Timer 20-20-20 berjalan terlepas dari ada/tidaknya pose.
-        now = time.monotonic()
-        break_due = False
-        if now - self._last_break >= self.break_interval:
-            break_due = True
-            self._last_break = now
-
-        no_flags = {"slouching": False, "too_close": False, "tilted": False,
-                    "break_due": break_due}
-        break_alerts = [ALERT_BREAK] if break_due else []
-
-        # Kasus tepi: pose tidak terdeteksi / sebagian tubuh keluar frame.
-        if not self._is_valid(landmarks):
-            return self._feedback("need_calibration", None, no_flags,
-                                  [ALERT_NO_POSE] + break_alerts)
-
-        feats = _extract_features(landmarks)
-        if feats is None:
-            return self._feedback("need_calibration", None, no_flags,
-                                  [ALERT_NO_POSE] + break_alerts)
-
-        hr, ew, td = feats
-        self._hr.append(hr)
-        self._ew.append(ew)
-        self._td.append(td)
-        shr, sew, std = self._smoothed()
-        metrics = {
-            "head_ratio": round(shr, 3),
-            "eye_width": round(sew, 3),
-            "tilt_deg": round(std, 1),
-        }
-
-        # Belum kalibrasi: tampilkan metrik untuk pratinjau, tapi belum menilai.
-        if not self.calibrated:
-            return self._feedback("need_calibration", metrics, no_flags,
-                                  [ALERT_NEED_CALIB] + break_alerts)
-
-        slouching = shr < self.slouch_ratio * self.baseline["head_ratio"]
-        too_close = sew > self.too_close_ratio * self.baseline["eye_width"]
-        tilted = std > self.tilt_degrees
-
-        self._count_events(slouching, too_close, tilted)
-
-        bad = slouching or too_close or tilted
-        self.stats.total_frames += 1
-        if not bad:
-            self.stats.good_frames += 1
-
-        alerts = []
-        if slouching:
-            alerts.append(ALERT_SLOUCH)
-        if too_close:
-            alerts.append(ALERT_TOO_CLOSE)
-        if tilted:
-            alerts.append(ALERT_TILTED)
-        alerts += break_alerts
-
-        flags = {"slouching": slouching, "too_close": too_close,
-                 "tilted": tilted, "break_due": break_due}
-        status = "warn" if bad else "good"
-        return self._feedback(status, metrics, flags, alerts)
-
 
 # ==========================================================================
-# Self-test (CLAUDE.md §8: `python analysis.py`) — tanpa kamera/MediaPipe.
+# Self-test (`python analysis.py`) — tanpa kamera/MediaPipe.
 # ==========================================================================
 if __name__ == "__main__":
     from collections import namedtuple
 
-    # Landmark palsu untuk uji: cukup punya x, y, visibility.
     Landmark = namedtuple("Landmark", ["x", "y", "visibility"])
 
-    def make_pose(eye_y=0.30, eye_xl=0.45, eye_xr=0.55,
-                  sh_y=0.55, sh_xl=0.35, sh_xr=0.65,
-                  sh_yl=None, sh_yr=None, vis=1.0):
-        """Bangun list 33 landmark; hanya indeks yang dipakai yang berarti."""
-        sh_yl = sh_y if sh_yl is None else sh_yl
-        sh_yr = sh_y if sh_yr is None else sh_yr
+    def make_pose(lw=(0.40, 0.45), rw=(0.60, 0.45),
+                  ls=(0.40, 0.40), rs=(0.60, 0.40), vis=1.0):
+        """Bangun 33 landmark; default tangan 'guard' (dekat bahu).
+        shoulder_width = 0.20."""
         lm = [Landmark(0.5, 0.5, vis) for _ in range(33)]
-        lm[LEFT_EYE] = Landmark(eye_xl, eye_y, vis)
-        lm[RIGHT_EYE] = Landmark(eye_xr, eye_y, vis)
-        lm[LEFT_SHOULDER] = Landmark(sh_xl, sh_yl, vis)
-        lm[RIGHT_SHOULDER] = Landmark(sh_xr, sh_yr, vis)
+        lm[LEFT_SHOULDER] = Landmark(ls[0], ls[1], vis)
+        lm[RIGHT_SHOULDER] = Landmark(rs[0], rs[1], vis)
+        lm[LEFT_WRIST] = Landmark(lw[0], lw[1], vis)
+        lm[RIGHT_WRIST] = Landmark(rw[0], rw[1], vis)
         return lm
 
-    def feed(an, pose, n=SMOOTH_WINDOW):
-        """Isi jendela smoothing dengan pose yang sama, balikkan feedback akhir."""
-        fb = None
-        for _ in range(n):
-            fb = an.analyze(pose)
-        return fb
-
-    passed = 0
-    failed = 0
+    passed = failed = 0
 
     def check(name, cond):
         global passed, failed
         if cond:
-            passed += 1
-            print(f"  [OK]   {name}")
+            passed += 1; print(f"  [OK]   {name}")
         else:
-            failed += 1
-            print(f"  [GAGAL] {name}")
+            failed += 1; print(f"  [GAGAL] {name}")
 
-    print("== Self-test PostureAnalyzer ==")
+    print("== Self-test PunchAnalyzer ==")
 
-    upright = make_pose()  # head_ratio=(0.55-0.30)/0.30 ≈ 0.833, eye_width=0.10
+    extended = make_pose(lw=(0.40, 0.90), rw=(0.60, 0.90))  # ext = 0.5/0.2 = 2.5
+    guard = make_pose()                                     # ext = 0.05/0.2 = 0.25
 
-    # 1. Sebelum kalibrasi → need_calibration
-    an = PostureAnalyzer()
-    fb = an.analyze(upright)
-    check("Belum kalibrasi -> status need_calibration",
-          fb["status"] == "need_calibration")
+    # 1. Sebelum Play → idle, tanpa target
+    an = PunchAnalyzer()
+    fb = an.analyze(guard)
+    check("Sebelum Play -> status idle", fb["status"] == "idle")
+    check("Sebelum Play -> tidak ada target", fb["target"] is None)
 
-    # 2. Kalibrasi mengembalikan baseline
-    base = an.calibrate(upright)
-    check("Kalibrasi mengembalikan baseline", base is not None and "head_ratio" in base)
-    check("Sesudah kalibrasi -> calibrated True", an.calibrated)
+    # 2. Play langsung mulai (tanpa kalibrasi) + target muncul
+    check("start() berhasil", an.start() is True)
+    fb = an.analyze(guard)
+    check("Sesudah Play -> status playing", fb["status"] == "playing")
+    check("Sesudah Play -> target muncul", fb["target"] is not None)
 
-    # 3. Postur tegak -> good, tanpa flag
-    fb = feed(an, upright)
-    check("Postur tegak -> status good", fb["status"] == "good")
-    check("Postur tegak -> tidak ada flag aktif",
-          not any([fb["flags"]["slouching"], fb["flags"]["too_close"],
-                   fb["flags"]["tilted"]]))
+    # 3. Pukulan sah + kena target -> HIT
+    an = PunchAnalyzer(); an.start()
+    an.active_target = {"id": "X", "x": 0.40, "y": 0.90, "r": 0.20}
+    for _ in range(3):
+        an.analyze(guard)
+    fb = an.analyze(extended)
+    check("Pukulan sah ke target -> hit", fb["last_event"]["type"] == "hit")
+    check("Hit -> skor bertambah", fb["stats"]["score"] >= SCORE_BASE)
+    check("Hit -> hits == 1", fb["stats"]["hits"] == 1)
+    check("Hit -> kombo == 1", fb["stats"]["combo"] == 1)
 
-    # 4. Membungkuk: kepala turun mendekati bahu -> head_ratio jatuh
-    an = PostureAnalyzer(); an.calibrate(upright)
-    slouch = make_pose(eye_y=0.48)  # head_ratio=(0.55-0.48)/0.30 ≈ 0.233
-    fb = feed(an, slouch)
-    check("Membungkuk -> flag slouching", fb["flags"]["slouching"])
-    check("Membungkuk -> status warn", fb["status"] == "warn")
-    check("Membungkuk -> slouch_events terhitung", fb["stats"]["slouch_events"] >= 1)
+    # 4. Rearm: tetap terjulur tidak menghitung pukulan kedua
+    fb = an.analyze(extended)
+    check("Tetap terjulur -> tidak double-count", fb["stats"]["punches"] == 1)
 
-    # 5. Terlalu dekat: mata melebar -> eye_width naik
-    an = PostureAnalyzer(); an.calibrate(upright)
-    close = make_pose(eye_xl=0.43, eye_xr=0.57)  # eye_width=0.14 > 1.22*0.10
-    fb = feed(an, close)
-    check("Terlalu dekat -> flag too_close", fb["flags"]["too_close"])
-    check("Terlalu dekat -> close_events terhitung (pemetaan nama)",
-          fb["stats"]["close_events"] >= 1)
+    # 5. Pukulan pelan tidak dihitung
+    an = PunchAnalyzer(); an.start()
+    an.active_target = {"id": "X", "x": 0.40, "y": 0.90, "r": 0.20}
+    an.analyze(guard)
+    y = 0.45
+    for _ in range(25):
+        y += 0.02
+        fb = an.analyze(make_pose(lw=(0.40, y), rw=(0.60, y)))
+    check("Pukulan pelan -> tidak terhitung", fb["stats"]["punches"] == 0)
 
-    # 6. Miring: bahu tidak rata -> tilt_deg naik
-    an = PostureAnalyzer(); an.calibrate(upright)
-    tilt = make_pose(sh_yl=0.50, sh_yr=0.60)  # atan2(0.10,0.30) ≈ 18.4° > 9°
-    fb = feed(an, tilt)
-    check("Miring -> flag tilted", fb["flags"]["tilted"])
-    check("Miring -> tilt_events terhitung", fb["stats"]["tilt_events"] >= 1)
+    # 6. Ekstensi kurang (setengah) walau cepat tidak dihitung
+    an = PunchAnalyzer(); an.start()
+    an.active_target = {"id": "X", "x": 0.40, "y": 0.60, "r": 0.30}
+    for _ in range(3):
+        an.analyze(guard)
+    half = make_pose(lw=(0.40, 0.60), rw=(0.60, 0.60))  # ext = 1.0 < 0.7*1.5 = 1.05
+    fb = an.analyze(half)
+    check("Ekstensi setengah -> tidak terhitung", fb["stats"]["punches"] == 0)
 
-    # 7. Kasus tepi: tidak ada pose -> need_calibration, tidak crash
-    an = PostureAnalyzer(); an.calibrate(upright)
+    # 7. Pukulan sah TAPI meleset target -> miss, kombo putus
+    an = PunchAnalyzer(); an.start()
+    an.active_target = {"id": "X", "x": 0.05, "y": 0.05, "r": 0.10}
+    for _ in range(3):
+        an.analyze(guard)
+    fb = an.analyze(extended)
+    check("Pukulan meleset -> miss", fb["last_event"]["type"] == "miss")
+    check("Miss -> hits tetap 0", fb["stats"]["hits"] == 0)
+    check("Miss -> kombo 0", fb["stats"]["combo"] == 0)
+
+    # 8. Stop -> berhenti, tanpa target, kembali idle
+    an = PunchAnalyzer(); an.start(); an.stop()
+    fb = an.analyze(extended)
+    check("Sesudah Stop -> status idle", fb["status"] == "idle")
+    check("Sesudah Stop -> tidak ada target", fb["target"] is None)
+
+    # 9. Kasus tepi: tubuh tak terdeteksi saat playing -> tanpa crash
+    an = PunchAnalyzer(); an.start()
     fb = an.analyze(None)
-    check("Pose None -> need_calibration tanpa crash",
-          fb["status"] == "need_calibration")
+    check("Pose None saat playing -> tanpa crash", fb["status"] == "playing")
 
-    # 8. Kasus tepi: landmark visibility rendah -> dianggap tak valid
-    low = make_pose(vis=0.1)
-    fb = an.analyze(low)
-    check("Visibility rendah -> need_calibration",
-          fb["status"] == "need_calibration")
-
-    # 9. Timer istirahat: interval sangat kecil -> break_due menyala sekali
-    an = PostureAnalyzer(); an.calibrate(upright)
-    an.break_interval = 0  # paksa jatuh tempo segera
-    fb = an.analyze(upright)
-    check("Interval 0 -> break_due True", fb["flags"]["break_due"])
-    check("Break -> alert istirahat muncul", ALERT_BREAK in fb["alerts"])
-
-    # 10. Skor postur: bentuk dict sesuai kontrak §5
-    keys = {"elapsed_sec", "posture_score", "slouch_events",
-            "close_events", "tilt_events"}
-    check("stats.to_dict() punya kunci sesuai kontrak §5",
-          set(an.stats.to_dict().keys()) == keys)
+    # 10. Bentuk stats dict
+    keys = {"elapsed_sec", "score", "combo", "best_combo", "punches", "hits",
+            "accuracy", "avg_speed", "best_speed", "last_reaction_ms",
+            "avg_reaction_ms"}
+    check("stats.to_dict() berkunci sesuai kontrak", set(an.stats.to_dict()) == keys)
 
     print(f"\nHasil: {passed} lulus, {failed} gagal")
     raise SystemExit(1 if failed else 0)

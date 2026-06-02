@@ -1,114 +1,113 @@
-# Study Guardian
+# Study Guardian — Punch Trainer
 
-Perangkat **edge AI pemantau postur belajar**. Berjalan di NVIDIA Jetson Orin
-Nano dengan kamera menghadap meja. MediaPipe + seluruh logika analisis berjalan
-**di perangkat (Python)** — video tidak pernah keluar ke cloud. User memantau
-lewat halaman web sederhana yang disajikan langsung oleh Flask.
+Game **latihan tinju berbasis edge AI**. Berjalan di NVIDIA Jetson Orin Nano
+(atau laptop untuk pengembangan) dengan kamera menghadap pemain. MediaPipe +
+seluruh logika game berjalan **di perangkat (Python)** — video tidak pernah
+keluar ke cloud. Pemain bermain lewat halaman web yang disajikan langsung oleh
+Flask.
 
-Tiga deteksi inti: **membungkuk**, **wajah terlalu dekat ke layar**, **badan
-miring**. Plus pengingat istirahat **20-20-20** dan **skor postur** per sesi.
+Mode utama: **Target Reaksi** — target (🥊) menyala di salah satu zona; pemain
+harus meninju ke arahnya. Pukulan **hanya dihitung** bila **cepat**, **ter-ekstensi
+penuh** (relatif jangkauan default), dan **mengenai zona target**. Sistem
+menghitung **skor, kombo, akurasi, kecepatan (estimasi m/s), dan waktu reaksi**.
 
 Dokumen perencanaan lengkap: [`PRD_Study_Guardian.md`](PRD_Study_Guardian.md).
-Panduan konteks coding: [`CLAUDE.md`](CLAUDE.md).
+Panduan konteks coding: [`CLAUDE.md`](CLAUDE.md). Cara pakai: [`PANDUAN.md`](PANDUAN.md).
 
 ---
 
 ## Arsitektur (monolitik)
 
-Satu proses Flask menangani semuanya — tidak ada server frontend terpisah,
-tidak ada Node/npm, tidak ada langkah build.
+Satu proses Flask menangani semuanya — tidak ada server frontend terpisah, tidak
+ada Node/npm, tidak ada langkah build (frontend pakai pustaka vendor lokal).
 
 ```
-Kamera ─► OpenCV ─► MediaPipe Pose (Python) ─► PostureAnalyzer ─► Flask
-                                                                  ├─ index.html (HTML/JS)
-                                                                  ├─ /video_feed (MJPEG + skeleton)
-                                                                  ├─ /ws (WebSocket: feedback)
-                                                                  ├─ /api/... (REST)
-                                                                  └─ PostgreSQL (riwayat sesi)
+Kamera ─► OpenCV ─► MediaPipe Pose Landmarker (Tasks) ─► PunchAnalyzer ─► Flask
+                                                                          ├─ index.html (HTML/JS)
+                                                                          ├─ /video_feed (MJPEG + skeleton)
+                                                                          ├─ /ws (WebSocket: state game)
+                                                                          ├─ /api/... (REST)
+                                                                          └─ PostgreSQL (riwayat sesi)
 ```
 
-Deteksi pose & seluruh keputusan terjadi **di Python**, bukan di browser.
-Browser hanya menampilkan `<img src="/video_feed">` + update via WebSocket.
+Deteksi pose & seluruh keputusan game terjadi **di Python**, bukan di browser.
+Browser menampilkan `<img src="/video_feed">` + overlay target + update via WebSocket.
 
 ## Struktur berkas
 
 | Berkas | Peran |
 |--------|-------|
-| `analysis.py` | `PostureAnalyzer` — kalibrasi, deteksi, smoothing, skor, timer 20-20-20. Punya self-test. |
+| `analysis.py` | `PunchAnalyzer` — deteksi pukulan, target, skor/kombo, reaksi. Punya self-test. |
 | `camera.py` | Akuisisi kamera + MediaPipe **Pose Landmarker (Tasks API)**, gambar skeleton, sediakan frame & landmark. |
-| `app.py` | Entrypoint Flask: `/`, `/video_feed`, `/ws`, `/api/*`, loop analisis. |
-| `db.py` | Koneksi PostgreSQL: riwayat sesi + pengaturan ambang (tahan-gagal). |
+| `app.py` | Entrypoint Flask: `/`, `/video_feed`, `/ws`, `/api/*`, loop analisis (15 Hz). |
+| `db.py` | Koneksi PostgreSQL: riwayat sesi + pengaturan (tahan-gagal). |
 | `schema.sql` | DDL tabel `sessions` & `settings`. |
+| `templates/index.html`, `static/app.js`, `static/style.css` | UI arena (live view, overlay target, HUD, statistik, riwayat). |
+| `static/vendor/` | Pustaka lokal: Alpine.js, Chart.js, Toastify, Day.js. |
 | `models/pose_landmarker_lite.task` | Model MediaPipe Pose (lite, ~5,5 MB). Disertakan agar jalan offline. |
-| `templates/index.html`, `static/app.js`, `static/style.css` | UI (live view, status, statistik, riwayat). |
 
 ---
 
 ## Instalasi
 
 ```bash
-# 1. Dependensi Python (di Jetson; OpenCV mungkin sudah dari JetPack — jangan timpa)
+# 1. venv Python 3.10 + dependensi (lihat PANDUAN.md untuk detail)
+/usr/local/opt/python@3.10/bin/python3.10 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 
 # 2. Database
-sudo apt install postgresql
-sudo -u postgres createdb study_guardian
-psql -U postgres -d study_guardian -f schema.sql
+createdb study_guardian
+psql -d study_guardian -f schema.sql
 ```
 
-Konfigurasi koneksi DB lewat environment variable (punya default lokal):
-`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`. Kamera lewat
-`CAMERA_INDEX` (default `0`).
+Konfigurasi koneksi DB & kamera lewat `.env` (lihat `.env.example`):
+`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `CAMERA_INDEX`,
+`POSE_MODEL_PATH` (opsional).
 
 ## Menjalankan
 
 ```bash
-# Mode daya maksimal Jetson
-sudo nvpmodel -m 0 && sudo jetson_clocks
-
-# Jalankan server
-python app.py
-# Buka http://<IP_JETSON>:5000 dari browser (Jetson atau perangkat se-jaringan)
+sudo nvpmodel -m 0 && sudo jetson_clocks   # Jetson: mode daya maksimal
+python app.py                              # buka http://<IP>:5000
 ```
 
-Aplikasi tetap berjalan walau PostgreSQL belum tersedia (riwayat tidak
-tersimpan) sehingga mudah didemokan.
+Aplikasi tetap berjalan walau PostgreSQL belum tersedia (riwayat tidak tersimpan).
 
-## Uji logika analisis tanpa kamera
+## Uji logika game tanpa kamera
 
 ```bash
-python analysis.py     # menjalankan 17 self-test PostureAnalyzer
+python analysis.py     # menjalankan self-test PunchAnalyzer (19/19)
 ```
 
 ---
 
-## Cara pakai
+## Cara main
 
-1. Buka halaman, tunggu live view + status muncul.
-2. **Duduk tegak** senyaman mungkin, tekan **Kalibrasi** (menetapkan baseline).
-3. Pantau status: hijau "Postur Baik" / kuning "Perlu Diperbaiki" + peringatan.
-4. Tekan **Akhiri Sesi** untuk menyimpan skor & statistik ke riwayat.
+1. Buka halaman (layar penuh), tunggu arena muncul.
+2. Tekan **▶ Play** — **langsung mulai, tanpa kalibrasi**.
+3. Target 🥊 menyala di salah satu zona → **tinju cepat ke arahnya** (gerakkan tangan
+   sampai—di video—menutupi 🥊).
+4. Poin hanya masuk bila pukulan **cepat + lengan cukup lurus + kena zona**.
+   HIT → kombo naik (pengali skor) + catat kecepatan & reaksi; MISS → kombo putus.
+5. Tekan **⏹ Stop** untuk berhenti. (Riwayat sengaja **tidak disimpan**.)
 
-Ambang (relatif terhadap baseline kalibrasi), lihat `analysis.py` / CLAUDE.md §6:
+Ambang game (lihat `analysis.py` / CLAUDE.md §6), bisa diubah via `/api/settings`:
 
 | Parameter | Nilai | Arti |
 |-----------|-------|------|
-| `SLOUCH_RATIO` | 0.82 | membungkuk bila `head_ratio` < 82% baseline |
-| `TOO_CLOSE_RATIO` | 1.22 | terlalu dekat bila `eye_width` > 122% baseline |
-| `TILT_DEGREES` | 9.0 | miring bila `tilt_deg` > 9° |
-| `SMOOTH_WINDOW` | 8 | moving average antar-frame |
-| `BREAK_INTERVAL_SEC` | 1200 | pengingat istirahat tiap 20 menit (kecilkan saat demo) |
+| `PUNCH_SPEED_MIN` | 1.5 | kecepatan pergelangan minimal (unit-layar/detik) |
+| `PUNCH_EXTEND_FRAC` | 0.70 | pukulan sah bila ekstensi ≥ 70% jangkauan default |
+| `REARM_FRAC` | 0.55 | harus menarik tangan < 55% untuk "isi ulang" |
+| `TARGET_RADIUS` | 0.18 | radius zona target (ternormalisasi) |
+| `SCORE_BASE` | 100 | poin dasar per hit (dikali kombo) |
 
 ---
 
-## Catatan environment (Jetson)
+## Catatan environment
 
-MediaPipe dijalankan di **CPU** untuk MVP — akselerasi GPU di Orin Nano rumit
-dan bukan target (CLAUDE.md §9 / PRD §18). Resolusi ~640×480, model Pose *lite*
-(`model_complexity=0`).
-
-Kombinasi versi sangat menentukan keberhasilan instalasi MediaPipe.
-Catat versi yang berhasil di sini:
+MediaPipe dijalankan di **CPU** (model *lite*, Tasks API). Pukulan cepat → jaga
+fps tinggi (resolusi ~640×480, analisis ~15 Hz).
 
 **Dev (macOS Intel, x86_64) — TERVERIFIKASI:**
 
@@ -122,7 +121,7 @@ Catat versi yang berhasil di sini:
 
 > Catatan pin (lihat komentar di `requirements.txt`): `mediapipe` di-pin agar pip
 > tidak *backtracking*; `opencv-contrib-python` di-pin ke 4.9.0.80 karena versi
-> terbaru memaksa `numpy>=2` yang bentrok dengan mediapipe 0.10.14 (butuh numpy 1).
+> terbaru memaksa `numpy>=2` yang bentrok dengan mediapipe 0.10.14.
 
 **Jetson (aarch64) — isi setelah teruji di perangkat:**
 
@@ -133,8 +132,8 @@ Catat versi yang berhasil di sini:
 | mediapipe | _isi setelah teruji_ |
 | opencv (JetPack) | _isi setelah teruji_ |
 
-Jika `pip install mediapipe` gagal untuk kombinasi JetPack/Python kalian, pakai
-wheel aarch64 komunitas atau build dari source (lihat PRD §19).
+Jika `pip install mediapipe` gagal di aarch64, pakai wheel komunitas atau build
+dari source (lihat PRD §19).
 
 ---
 

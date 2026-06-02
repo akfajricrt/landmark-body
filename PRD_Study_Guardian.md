@@ -1,70 +1,92 @@
-# PRD — Study Guardian
-### Sistem Pemantau Postur & Fokus Belajar Berbasis MediaPipe (Edge / Jetson Orin Nano)
+# PRD — Study Guardian: Punch Trainer
+### Game Latihan Tinju Berbasis MediaPipe (Edge / Jetson Orin Nano)
 
 | | |
 |---|---|
-| **Nama Produk** | Study Guardian |
+| **Nama Produk** | Study Guardian — Punch Trainer |
 | **Jenis Tugas** | Application-based project (Final Project MediaPipe) |
-| **Platform** | Perangkat edge: NVIDIA Jetson Orin Nano + kamera, dengan antarmuka web sederhana (HTML/JS) yang disajikan Flask |
+| **Platform** | Perangkat edge: NVIDIA Jetson Orin Nano + kamera (atau laptop untuk dev), antarmuka web (HTML/JS) yang disajikan Flask |
 | **Tim** | Maksimal 5 orang |
 | **Deadline** | 1 Juli 2026 |
-| **Versi Dokumen** | 1.0 (Flask monolitik + PostgreSQL; frontend HTML/JS disajikan Flask; deployment Jetson Orin Nano) |
+| **Versi Dokumen** | 1.0 (Punch Trainer; Flask monolitik + PostgreSQL; MediaPipe Pose Landmarker Tasks API; deployment Jetson Orin Nano) |
 
-> **Catatan arsitektur:** frontend **tidak dipisah** — memakai **HTML + JavaScript polos yang disajikan langsung oleh Flask** (arsitektur monolitik). Lebih simpel & cepat: tanpa Node/npm, tanpa langkah build, satu server saja di Jetson. Inti: MediaPipe + analisis berjalan di Python on-device di Jetson, database PostgreSQL.
->
-> Catatan: dokumen tugas hanya mensyaratkan front-back terpisah *jika* dipilih ("jika ... boleh pakai Flask/Django"); arsitektur monolitik ini sah dan tetap memenuhi syarat backend Python.
+> **Catatan arsitektur:** frontend **tidak dipisah** — memakai **HTML + JavaScript
+> polos** (Alpine.js/Chart.js/Toastify/Day.js sebagai pustaka ringan vendor lokal)
+> yang disajikan langsung oleh Flask (arsitektur monolitik). Tanpa Node/npm, tanpa
+> langkah build. Inti: MediaPipe + seluruh logika game berjalan di Python on-device,
+> database PostgreSQL.
 
 ---
 
 ## 1. Ringkasan Eksekutif
 
-Study Guardian adalah perangkat edge AI yang memantau postur tubuh dan kebiasaan duduk selama belajar. Sebuah NVIDIA Jetson Orin Nano dengan kamera dipasang menghadap meja belajar; perangkat ini menjalankan MediaPipe secara lokal untuk mendeteksi postur secara real-time, memberi peringatan halus saat user membungkuk, terlalu dekat ke layar, atau duduk miring, serta mengingatkan istirahat mata dengan aturan 20-20-20. User memantau status dan riwayatnya melalui antarmuka web sederhana (HTML + JavaScript) yang disajikan langsung oleh Flask di Jetson.
+Punch Trainer adalah perangkat edge AI yang mengubah kamera menjadi **alat latihan
+tinju interaktif**. Sebuah NVIDIA Jetson Orin Nano (atau laptop) dengan kamera
+dipasang menghadap pemain; perangkat menjalankan MediaPipe secara lokal untuk
+mendeteksi gerakan tubuh bagian atas (bahu, siku, pergelangan) secara real-time.
+Sebuah target menyala di layar; pemain harus **meninju ke arah target dengan
+pukulan yang benar** — cepat dan ter-ekstensi penuh. Sistem menilai pukulan,
+menghitung skor, kombo, akurasi, kecepatan, dan waktu reaksi.
 
-Nilai jual utamanya: **seluruh pemrosesan terjadi di perangkat (on-device / edge)** — video tidak pernah meninggalkan Jetson, tidak ada cloud, privat sepenuhnya — sementara Python (di Jetson) menjadi inti yang menjalankan deteksi MediaPipe sekaligus seluruh logika analisis. Ini menjadikan Study Guardian contoh nyata penerapan MediaPipe pada perangkat embedded, sesuai semangat dokumen tugas.
+Nilai jual utama: **seluruh pemrosesan terjadi di perangkat (on-device / edge)** —
+video tidak pernah meninggalkan perangkat, tanpa cloud — sementara Python menjadi
+inti yang menjalankan deteksi MediaPipe sekaligus seluruh logika game. Ini contoh
+nyata penerapan MediaPipe pada perangkat embedded yang **interaktif dan
+gamified**, sesuai semangat dokumen tugas.
 
 ---
 
 ## 2. Latar Belakang & Pernyataan Masalah
 
-Mahasiswa menghabiskan berjam-jam di depan laptop. Postur buruk yang berlangsung lama memicu nyeri leher–punggung (*text neck*), kelelahan mata digital, dan menurunnya konsentrasi. Masalahnya, orang tidak menyadari postur memburuk secara perlahan; tidak ada yang mengingatkan.
+Latihan tinju (atau olahraga refleks pada umumnya) butuh **umpan balik objektif**:
+seberapa cepat pukulan, seberapa tepat sasaran, seberapa cepat reaksi. Alat
+profesional (sensor sarung, reflex bag elektronik) mahal. Aplikasi yang ada sering
+butuh perangkat khusus atau mengirim video ke cloud.
 
-Solusi yang ada umumnya berupa perangkat keras mahal (sensor di kursi) atau aplikasi berbayar yang mengirim data ke cloud. Study Guardian menawarkan alternatif: perangkat kecil, berdiri sendiri di meja, memproses semuanya secara lokal tanpa mengirim data ke mana pun — cocok untuk pengguna yang peduli privasi.
+Punch Trainer menawarkan alternatif: cukup **satu kamera + perangkat edge**, semua
+diproses lokal. Pemain mendapat skor, kombo, kecepatan, dan reaksi secara
+real-time tanpa alat tambahan, tanpa mengirim rekaman ke mana pun — cocok untuk
+latihan mandiri di rumah dan demonstrasi teknologi edge AI.
 
 ---
 
 ## 3. Tujuan & Bukan Tujuan
 
 **Tujuan (MVP)**
-- Mendeteksi tiga masalah postur utama secara real-time di perangkat: membungkuk, terlalu dekat ke layar, badan miring.
-- Memberi umpan balik visual yang tidak mengganggu, plus pengingat istirahat 20-20-20.
-- Menyimpan dan menampilkan riwayat sesi belajar beserta skor postur.
-- Berjalan mandiri di Jetson Orin Nano; antarmuka web bisa dibuka dari layar Jetson atau perangkat lain di jaringan yang sama.
+- Mendeteksi **pukulan sah** (cepat + ekstensi penuh) secara real-time di perangkat.
+- Mode **Target Reaksi**: target menyala di zona, pukulan dihitung hanya bila kena.
+- Memberi umpan balik instan: skor, kombo, akurasi, kecepatan (estimasi), reaksi.
+- Menyimpan & menampilkan riwayat sesi latihan beserta tren skor.
+- Berjalan mandiri di Jetson Orin Nano; UI bisa dibuka dari layar perangkat atau perangkat se-jaringan.
 
 **Bukan Tujuan (di luar lingkup MVP)**
-- Tidak ada sistem login/akun multi-user (cukup satu pengguna lokal).
-- Tidak mendiagnosis kondisi medis; hanya pengingat ergonomi.
-- Tidak mengenali identitas wajah; hanya posisi tubuh.
-- Tidak menargetkan akselerasi GPU sebagai syarat MVP (lihat Bagian 18 — GPU adalah opsi lanjutan).
+- Tidak mengukur **tenaga/impact** pukulan (kamera hanya mengukur gerakan, kecepatan, ekstensi, akurasi).
+- Tidak ada login/akun multi-user (cukup satu pemain lokal).
+- Tidak mengklasifikasi jenis pukulan (jab/cross/hook) secara presisi di MVP.
+- Tidak menargetkan akselerasi GPU sebagai syarat MVP (lihat §18).
 
 ---
 
 ## 4. Target Pengguna
 
-**Persona utama — "Sinta, mahasiswi tingkat 2"**
-Belajar 4–6 jam sehari di kamar kos. Sering pegal leher tapi tidak sadar kapan postur memburuk. Ingin alat yang tinggal dinyalakan dan bekerja sendiri. Mengutamakan privasi — tidak nyaman jika rekaman dirinya dikirim ke server cloud.
+**Persona utama — "Raka, mahasiswa yang suka olahraga"**
+Ingin latihan refleks & kecepatan tangan di kamar kos tanpa alat mahal. Suka
+tantangan terukur (skor, kombo) dan progres yang kelihatan. Mengutamakan privasi —
+tidak mau rekaman dirinya dikirim ke server cloud.
 
-**Kebutuhan kunci persona:** perangkat menyala otomatis & langsung memantau, peringatan jelas tapi tidak mengganggu konsentrasi, dan jaminan data tidak ke mana-mana.
+**Kebutuhan kunci persona:** tinggal nyalakan & main, umpan balik instan yang
+terasa seperti game, dan jaminan video diproses lokal.
 
 ---
 
 ## 5. User Stories
 
-1. Sebagai pengguna, saya ingin **perangkat langsung memantau saat dinyalakan** tanpa setup rumit.
-2. Sebagai pengguna, saya ingin **mengkalibrasi postur ideal saya** agar penilaian sesuai tubuh saya.
-3. Sebagai pengguna, saya ingin **diberi tahu saat membungkuk** agar bisa langsung memperbaiki posisi.
-4. Sebagai pengguna, saya ingin **diingatkan istirahat mata** secara berkala.
-5. Sebagai pengguna, saya ingin **melihat skor & statistik di akhir sesi** lewat tampilan web.
-6. Sebagai pengguna, saya ingin **yakin video saya diproses lokal di perangkat** dan tidak dikirim ke cloud.
+1. Sebagai pemain, saya ingin **mengkalibrasi jangkауan tangan saya** agar penilaian pukulan adil untuk tubuh saya.
+2. Sebagai pemain, saya ingin **target menyala** sehingga saya tahu harus meninju ke mana.
+3. Sebagai pemain, saya ingin **hanya pukulan benar (cepat + penuh + tepat) yang dapat poin** agar latihan bermakna.
+4. Sebagai pemain, saya ingin **melihat skor, kombo, kecepatan, dan reaksi** secara real-time.
+5. Sebagai pemain, saya ingin **melihat ringkasan & tren progres** di akhir sesi.
+6. Sebagai pemain, saya ingin **yakin video saya diproses lokal** dan tidak dikirim ke cloud.
 
 ---
 
@@ -72,75 +94,76 @@ Belajar 4–6 jam sehari di kamar kos. Sering pegal leher tapi tidak sadar kapan
 
 | ID | Fitur | Deskripsi | Prioritas |
 |----|-------|-----------|-----------|
-| F1 | Akuisisi kamera | Ambil frame dari kamera (USB/CSI) di Jetson via OpenCV | Wajib |
-| F2 | Deteksi pose on-device | Jalankan MediaPipe Pose Landmarker (Python) di Jetson, gambar skeleton overlay | Wajib |
-| F3 | Kalibrasi | Aksi dari UI untuk menetapkan postur tegak sebagai patokan (baseline) | Wajib |
-| F4 | Deteksi membungkuk | Peringatan saat kepala turun di bawah ambang baseline | Wajib |
-| F5 | Deteksi jarak layar | Peringatan saat wajah terlalu dekat ke kamera | Wajib |
-| F6 | Deteksi badan miring | Peringatan saat garis bahu melebihi kemiringan ambang | Wajib |
-| F7 | Pengingat 20-20-20 | Tiap 20 menit, ingatkan istirahatkan mata 20 detik | Wajib |
-| F8 | Statistik sesi | Skor postur (% waktu baik), durasi, jumlah event pelanggaran | Wajib |
-| F9 | Riwayat sesi | Simpan ringkasan tiap sesi ke PostgreSQL & tampilkan daftar | Wajib |
-| F10 | Live view di web | Tampilkan video ber-skeleton + status di halaman HTML/JS yang disajikan Flask | Wajib |
-| F11 | Pengaturan sensitivitas | Slider untuk menyetel ambang & interval istirahat | Opsional |
-| F12 | Notifikasi suara | Bunyi lembut saat peringatan (bisa dimatikan) | Opsional |
-| F13 | Autostart | Aplikasi berjalan otomatis saat Jetson menyala (systemd) | Opsional |
+| F1 | Akuisisi kamera | Ambil frame dari kamera (USB/CSI) via OpenCV | Wajib |
+| F2 | Deteksi pose on-device | MediaPipe Pose Landmarker (Tasks API, Python), gambar skeleton overlay | Wajib |
+| F3 | Kalibrasi jangkauan | Aksi UI untuk menetapkan jangkauan lengan penuh sebagai patokan | Wajib |
+| F4 | Deteksi pukulan sah | Kenali pukulan: kecepatan ≥ ambang + ekstensi ≥ ambang (relatif kalibrasi) | Wajib |
+| F5 | Target & zona | Target menyala di salah satu zona; pukulan dicek mengenai target | Wajib |
+| F6 | Skor & kombo | Hit menambah skor (dikali kombo); meleset memutus kombo | Wajib |
+| F7 | Metrik latihan | Akurasi, kecepatan (estimasi m/s), waktu reaksi | Wajib |
+| F8 | Statistik sesi | Skor, durasi, pukulan, hits, kombo terbaik, kecepatan terbaik | Wajib |
+| F9 | Riwayat sesi | Simpan ringkasan tiap sesi ke PostgreSQL & tampilkan daftar + grafik tren | Wajib |
+| F10 | Live view di web | Video ber-skeleton + overlay target + HUD di halaman HTML/JS | Wajib |
+| F11 | Pengaturan sensitivitas | Atur ambang kecepatan/ekstensi/radius target (disimpan ke DB) | Opsional |
+| F12 | Notifikasi suara | Bunyi saat HIT/MISS (bisa dimatikan) | Opsional |
+| F13 | Mode tambahan | Kombo (urutan zona), Timed Round (ronde berwaktu) | Opsional |
+| F14 | Autostart | Aplikasi berjalan otomatis saat perangkat menyala (systemd) | Opsional |
 
 ---
 
 ## 7. Kebutuhan Non-Fungsional
 
-- **Performa (Jetson, CPU):** target ≥ 12–15 fps untuk pose *lite* satu orang pada resolusi ~640×480. Gunakan mode daya maksimal (`nvpmodel` / `jetson_clocks`).
-- **Latency umpan balik:** peringatan muncul < 500 ms setelah postur berubah.
-- **Privasi:** seluruh pemrosesan terjadi di Jetson; tidak ada data video yang keluar ke internet. Antarmuka web hanya menampilkan hasil di jaringan lokal.
-- **Termal & daya:** Jetson harus berventilasi cukup; pantau suhu agar tidak *throttling* saat sesi panjang.
-- **Kemudahan pakai:** ideal-nya menyala → langsung memantau (autostart); kalibrasi cukup satu aksi.
-- **Kompatibilitas antarmuka:** halaman web dibuka via Chrome/Edge dari Jetson atau perangkat se-jaringan.
+- **Performa (CPU):** target ≥ 15 fps untuk pose *lite* satu orang pada ~640×480.
+  Penting karena pukulan cepat — fps rendah bisa melewatkan puncak gerakan.
+- **Latency umpan balik:** HIT/MISS muncul < 200 ms setelah pukulan.
+- **Privasi:** seluruh pemrosesan di perangkat; tidak ada video keluar ke internet.
+- **Termal & daya (Jetson):** ventilasi cukup; pakai mode daya maksimal.
+- **Kemudahan pakai:** nyala → kalibrasi satu aksi → langsung main.
+- **Kompatibilitas:** UI dibuka via Chrome/Edge dari perangkat atau se-jaringan.
 
 ---
 
 ## 8. Arsitektur Sistem
 
-Perangkat edge mandiri: semua inti berjalan di Jetson; antarmuka web disajikan dari Jetson.
+Perangkat edge mandiri: semua inti berjalan di perangkat; UI disajikan dari perangkat.
 
 ```
-                       NVIDIA JETSON ORIN NANO
+                       PERANGKAT (Jetson Orin Nano / laptop)
 ┌─────────────────────────────────────────────────────────────┐
 │  Kamera (USB / CSI)                                           │
 │        │                                                      │
 │        ▼                                                      │
-│  OpenCV  ──►  MediaPipe Pose Landmarker (Python, on-device)   │
+│  OpenCV  ──►  MediaPipe Pose Landmarker (Tasks API, on-device)│
 │                       │                                       │
 │                       ▼                                       │
-│              PostureAnalyzer (Python)                         │
-│              • kalibrasi & smoothing                          │
-│              • deteksi bungkuk / jarak / miring               │
-│              • timer 20-20-20  • hitung statistik             │
+│              PunchAnalyzer (Python)                           │
+│              • kalibrasi jangkauan & smoothing                │
+│              • deteksi pukulan (cepat + ekstensi + armed)     │
+│              • target/zona • skor • kombo • reaksi            │
 │                       │                                       │
 │        ┌──────────────┼───────────────────────┐              │
 │        ▼              ▼                        ▼              │
 │   Flask + flask-sock                      PostgreSQL          │
 │   • menyajikan index.html (HTML/JS)       (riwayat sesi)      │
 │   • MJPEG video feed (skeleton)                               │
-│   • WebSocket: feedback + statistik                           │
+│   • WebSocket: state game (target, event, stats)             │
 │   • REST: kalibrasi, riwayat, pengaturan                      │
 └───────────────────────────┬───────────────────────────────────┘
                             │  HTTP / WebSocket (jaringan lokal)
                             ▼
                   ┌──────────────────────┐
                   │   Browser            │
-                  │  (HTML + JS polos,   │
-                  │   disajikan Flask)   │
-                  │  • Live view (MJPEG) │
-                  │  • Panel status &    │
-                  │    statistik         │
-                  │  • Halaman riwayat   │
+                  │  • Arena (MJPEG)     │
+                  │  • Overlay target 🥊 │
+                  │  • HUD skor/kombo    │
+                  │  • Statistik & riwayat│
                   └──────────────────────┘
 ```
 
-**Mengapa begini:** menjalankan deteksi di Jetson menjadikan produk perangkat edge AI sejati (sesuai tujuan memakai Jetson) dan menjaga privasi (video tidak pernah ke cloud). Python di Jetson menjadi inti penuh: menjalankan MediaPipe *dan* seluruh logika keputusan. Flask sekaligus menyajikan halaman HTML/JS, sehingga **tidak ada server frontend terpisah** — satu proses Flask saja menangani UI, video, status, dan data. Lebih sedikit yang harus dipasang & dijalankan di Jetson.
-
-> Alternatif (jika Jetson tidak tersedia saat pengembangan): deteksi tetap bisa dijalankan di browser dengan `@mediapipe/tasks-vision`, lalu dipindahkan ke Jetson belakangan. Logika `PostureAnalyzer` identik karena murni Python. Frontend HTML/JS yang sama tetap dipakai.
+**Mengapa begini:** menjalankan deteksi di perangkat menjadikan produk edge AI
+sejati dan menjaga privasi. Python menjadi inti penuh: menjalankan MediaPipe *dan*
+seluruh logika game. Flask sekaligus menyajikan UI → **tidak ada server frontend
+terpisah**.
 
 ---
 
@@ -148,17 +171,17 @@ Perangkat edge mandiri: semua inti berjalan di Jetson; antarmuka web disajikan d
 
 | Lapisan | Teknologi | Alasan |
 |---------|-----------|--------|
-| Perangkat | NVIDIA Jetson Orin Nano (JetPack/L4T) | Edge AI, target embedded MediaPipe |
-| Kamera | Webcam USB (paling mudah) atau kamera CSI | USB paling kompatibel & cepat dipasang |
+| Perangkat | Jetson Orin Nano (JetPack/L4T) / laptop | Edge AI, target embedded MediaPipe |
+| Kamera | Webcam USB / kamera CSI | USB paling kompatibel |
 | Akuisisi & gambar | OpenCV (Python) | Ambil frame, gambar skeleton, encode MJPEG |
-| Deteksi pose | `mediapipe` (Python, Pose Landmarker, model *lite*) di Jetson | Inti deteksi on-device |
-| Logika analisis | Python murni (`PostureAnalyzer`) | Inti keputusan; portabel & teruji |
-| Backend + frontend | **Flask** + `flask-sock` (WebSocket) | Satu server: menyajikan HTML/JS sekaligus API; ringan & mudah di Jetson |
-| Database | **PostgreSQL** (via `psycopg2` / SQLAlchemy) | Sesuai permintaan; andal & skalabel |
-| Frontend | **HTML + JavaScript polos** (disajikan Flask via Jinja2/static) | Tanpa Node/npm & tanpa build — paling simpel & cepat untuk MVP |
-| Komunikasi | MJPEG (video) + WebSocket (status) + REST (data) | MJPEG hemat untuk streaming; WS untuk update real-time |
+| Deteksi pose | `mediapipe` **Tasks API** (`PoseLandmarker`, model *lite*) | Inti deteksi on-device, API resmi terbaru |
+| Logika game | Python murni (`PunchAnalyzer`) | Inti keputusan; portabel & teruji |
+| Backend + frontend | **Flask** + `flask-sock` (WebSocket) | Satu server: UI + API; ringan |
+| Database | **PostgreSQL** (`psycopg2`) | Andal & skalabel |
+| Frontend | **HTML + JS** + Alpine.js · Chart.js · Toastify · Day.js (vendor lokal) | Reaktif, grafik, toast, tanpa build |
+| Komunikasi | MJPEG (video) + WebSocket (state) + REST (data) | MJPEG hemat; WS real-time |
 
-Catatan instalasi MediaPipe di Jetson: lihat Bagian 19. Jalankan pada **CPU** untuk MVP; akselerasi GPU bersifat opsional dan rumit.
+Jalankan pada **CPU** untuk MVP; akselerasi GPU opsional & rumit (§18).
 
 ---
 
@@ -166,23 +189,24 @@ Catatan instalasi MediaPipe di Jetson: lihat Bagian 19. Jalankan pada **CPU** un
 
 ```sql
 CREATE TABLE sessions (
-    id             SERIAL PRIMARY KEY,
-    started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    ended_at       TIMESTAMPTZ,
-    duration_sec   INTEGER,
-    posture_score  INTEGER,          -- 0..100, % waktu postur baik
-    slouch_events  INTEGER DEFAULT 0,
-    close_events   INTEGER DEFAULT 0,
-    tilt_events    INTEGER DEFAULT 0
+    id              SERIAL PRIMARY KEY,
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ended_at        TIMESTAMPTZ,
+    duration_sec    INTEGER,
+    score           INTEGER,
+    punches         INTEGER DEFAULT 0,   -- total pukulan sah
+    hits            INTEGER DEFAULT 0,   -- pukulan kena target
+    accuracy        INTEGER,             -- 0..100 (%)
+    best_combo      INTEGER DEFAULT 0,
+    best_speed      REAL,                -- m/s (estimasi)
+    avg_reaction_ms INTEGER
 );
 
--- opsional, untuk F11 (pengaturan tersimpan)
-CREATE TABLE settings (
-    id              INTEGER PRIMARY KEY DEFAULT 1,
-    slouch_ratio    REAL DEFAULT 0.82,
-    close_ratio     REAL DEFAULT 1.22,
-    tilt_degrees    REAL DEFAULT 9.0,
-    break_interval  INTEGER DEFAULT 1200   -- detik (20 menit)
+CREATE TABLE settings (        -- F11: ambang tersimpan
+    id            INTEGER PRIMARY KEY DEFAULT 1,
+    speed_min     REAL DEFAULT 2.0,
+    extend_frac   REAL DEFAULT 0.80,
+    target_radius REAL DEFAULT 0.13
 );
 ```
 
@@ -190,78 +214,102 @@ CREATE TABLE settings (
 
 ## 11. Spesifikasi API & Protokol
 
-**Streaming video:** `GET /video_feed` → aliran MJPEG (`multipart/x-mixed-replace`) berisi frame ber-skeleton. Ditampilkan di halaman sebagai `<img src="/video_feed">`.
+**Streaming video:** `GET /video_feed` → MJPEG (`multipart/x-mixed-replace`) berisi
+frame ber-skeleton. Ditampilkan sebagai `<img src="/video_feed">` dengan overlay
+target di atasnya.
 
-**Status real-time (WebSocket ` /ws`):** server (Jetson) mendorong feedback tiap analisis.
+**State game (WebSocket `/ws`):** server mendorong feedback tiap analisis.
 ```json
 {
   "type": "feedback",
-  "status": "good | warn | need_calibration",
-  "metrics": { "head_ratio": 0.95, "eye_width": 0.10, "tilt_deg": 3.2 },
-  "flags": { "slouching": false, "too_close": true, "tilted": false, "break_due": false },
-  "alerts": [ "Wajah terlalu dekat ke layar — mundur sedikit." ],
-  "stats": { "elapsed_sec": 540, "posture_score": 82,
-             "slouch_events": 3, "close_events": 1, "tilt_events": 0 }
+  "status": "ready | need_calibration",
+  "metrics": { "left": {"ext": 1.2, "speed": 3.4}, "right": {"ext": 0.4, "speed": 0.1} },
+  "target": { "id": "TR", "x": 0.70, "y": 0.35, "r": 0.13 },
+  "last_event": { "seq": 12, "type": "hit", "hand": "left", "combo": 4,
+                  "speed": 4.8, "reaction_ms": 310 },
+  "alerts": [],
+  "stats": { "elapsed_sec": 95, "score": 1500, "combo": 4, "best_combo": 7,
+             "punches": 22, "hits": 18, "accuracy": 82,
+             "avg_speed": 3.6, "best_speed": 4.8,
+             "last_reaction_ms": 310, "avg_reaction_ms": 313 }
 }
 ```
 
 **REST:**
-- `POST /api/calibrate` → menetapkan baseline dari frame saat ini; balas `{ "baseline": { "head_ratio": 1.2, "eye_width": 0.08 } }`.
+- `POST /api/calibrate` → tetapkan jangkauan; balas `{ "baseline": { "reach_left": 1.8, "reach_right": 1.7 } }`.
 - `POST /api/session/end` → tutup sesi & simpan ke PostgreSQL.
 - `GET /api/history` → daftar JSON sesi terakhir.
-- `GET /api/settings` / `PUT /api/settings` → baca/ubah ambang (F11).
+- `GET /api/settings` / `PUT /api/settings` → baca/ubah ambang (F11), disimpan ke DB.
 
 ---
 
-## 12. Detail Algoritma Analisis (inti Python)
+## 12. Detail Algoritma (inti Python)
 
-Logika ini portabel, baik dijalankan di browser maupun di Jetson. Dari 33 landmark dihitung tiga fitur:
+Dari landmark tubuh atas dihitung, **per tangan** (kiri 11/13/15, kanan 12/14/16):
 
-**a. Rasio tinggi kepala (deteksi membungkuk)**
-`head_ratio = (Y_bahu_tengah − Y_mata_tengah) / lebar_bahu`. Dinormalisasi terhadap lebar bahu agar **tidak terpengaruh jarak user ke kamera**. Membungkuk bila rasio < 82% dari baseline.
+**a. Ekstensi lengan**
+`extension = jarak(pergelangan, bahu) / lebar_bahu`. Dinormalisasi lebar bahu agar
+**tidak terpengaruh jarak ke kamera**. Lengan terjulur penuh = nilai besar.
 
-**b. Lebar antar-mata (deteksi jarak layar)**
-`eye_width = jarak(mata_kiri, mata_kanan)`, **sengaja tidak dinormalisasi** — pelebaran inilah penanda wajah mendekat. Terlalu dekat bila > 122% dari baseline.
+**b. Kecepatan pergelangan**
+`speed = perpindahan_pergelangan / dt` (unit-layar/detik), dihaluskan ringan
+(window kecil agar pukulan cepat tidak teredam). Estimasi `m/s = speed ×
+(0,40 / lebar_bahu)` (asumsi lebar bahu ~0,40 m).
 
-**c. Kemiringan bahu (deteksi badan miring)**
-Sudut garis bahu terhadap horizontal via `atan2`. Miring bila > 9°.
+**Kalibrasi:** jangkauan penuh (extension saat tangan terjulur) disimpan sebagai
+*baseline* per tangan; ambang relatif terhadapnya → adil untuk semua ukuran badan.
 
-**Kalibrasi:** fitur saat duduk tegak disimpan sebagai *baseline*; semua ambang relatif terhadapnya → adil untuk semua bentuk tubuh.
-**Smoothing:** rata-rata bergerak 8 frame untuk meredam getaran deteksi.
-**Penghitungan event:** dihitung hanya pada transisi baik → buruk.
-**Aturan 20-20-20:** timer di Python; tiap 20 menit memunculkan pengingat.
+**Deteksi pukulan (mesin status per tangan):** tangan "armed" saat ditarik
+(extension < 55% jangkauan). Pukulan **sah** terdaftar saat extension ≥ 80%
+jangkauan **dan** speed ≥ ambang **dan** sedang armed → status jadi "fired"
+(mencegah double-count) sampai ditarik lagi.
 
-> Catatan laporan: normalisasi & pemilihan ambang relatif inilah "tuning details" yang bisa kalian elaborasi sebagai kontribusi teknis.
+**Target & skor:** satu target aktif di sebuah zona. Saat pukulan sah terjadi,
+posisi pergelangan dicek terhadap zona target: **kena** → skor += `SCORE_BASE ×
+kombo`, kombo++, catat reaksi (waktu sejak target muncul), target baru muncul;
+**meleset** → kombo putus.
+
+> Catatan laporan: normalisasi terhadap lebar bahu, ambang relatif berbasis
+> kalibrasi, dan mesin status armed/rearm inilah "tuning details" yang bisa
+> dielaborasi sebagai kontribusi teknis.
 
 ---
 
 ## 13. Kebutuhan UI/UX (HTML + JavaScript, disajikan Flask)
 
-**Halaman utama (Dashboard):**
-- Live view (MJPEG) dengan overlay skeleton di tengah.
-- Indikator status besar: hijau "Postur Baik" / kuning "Perlu Diperbaiki".
-- Daftar peringatan aktif (muncul/hilang halus).
-- Tombol **Kalibrasi**, **Akhiri Sesi**.
-- Panel statistik live: skor postur, durasi, jumlah event.
-- Panduan singkat saat pertama buka: "1) Duduk tegak 2) Kalibrasi".
+**Arena (halaman utama):**
+- Live view (MJPEG) dengan overlay skeleton.
+- **Overlay target 🥊** yang menyala/berdenyut di zona aktif.
+- **HUD** di atas video: skor, kombo, waktu.
+- Indikator status: "Siap — Tinju!" / "Perlu Kalibrasi".
+- Strip metrik kecepatan kiri/kanan (m/s).
+- Tombol **Mulai (Kalibrasi)**, **Selesai**.
+- **Toast** HIT (kombo, kecepatan, reaksi) / MISS.
 
-**Halaman Riwayat:** daftar sesi sebelumnya dengan skor & durasi (data dari PostgreSQL).
+**Panel statistik & riwayat:** akurasi, kecepatan terbaik, pukulan, hits, kombo
+terbaik, reaksi rata-rata; **grafik tren skor** antar-sesi (Chart.js) + daftar riwayat.
 
-**Implementasi:** satu halaman `index.html` + file JS/CSS statis yang disajikan Flask. Live view memakai `<img src="/video_feed">` (MJPEG); status diperbarui via WebSocket; riwayat diambil via `fetch('/api/history')`.
+**Implementasi:** satu `index.html` + JS/CSS statis + pustaka vendor lokal. Status
+via WebSocket; riwayat via `fetch('/api/history')`.
 
-**Arah desain:** tenang & tidak melelahkan mata (tema terang lembut/warna hangat), peringatan terlihat tanpa mengganggu fokus.
+**Arah desain:** premium, energik (aksen merah tinju), target jelas terlihat,
+umpan balik instan.
 
 ---
 
 ## 14. Lingkup MVP vs Pengembangan Lanjutan
 
-**MVP (wajib selesai):** F1–F10 — kamera, deteksi pose on-device, kalibrasi, tiga deteksi postur, pengingat 20-20-20, statistik, riwayat (PostgreSQL), live view (HTML/JS disajikan Flask).
+**MVP (wajib):** F1–F10 — kamera, deteksi pose on-device, kalibrasi jangkauan,
+deteksi pukulan sah, target & skor/kombo, metrik (akurasi/kecepatan/reaksi),
+statistik, riwayat (PostgreSQL), live view + overlay target.
 
-**Jika sempat:** F11 (slider sensitivitas), F12 (suara), F13 (autostart systemd), grafik tren skor antar-sesi.
+**Jika sempat:** F11 (UI slider sensitivitas — endpoint sudah ada), F12 (suara),
+F13 (mode Kombo & Timed Round), F14 (autostart systemd).
 
-**Ide masa depan (sebut di laporan):** akselerasi GPU/TensorRT, deteksi mata mengantuk, beberapa profil pengguna, integrasi Pomodoro.
+**Ide masa depan:** klasifikasi jenis pukulan (jab/cross/hook), mode dua tangan
+spesifik, papan peringkat, integrasi musik/ritme, akselerasi GPU/TensorRT.
 
-> Prinsip dokumen tugas: **kualitas, bukan kuantitas.** Kunci MVP, pastikan demo mulus.
+> Prinsip dokumen tugas: **kualitas, bukan kuantitas.** Kunci MVP, demo mulus.
 
 ---
 
@@ -269,12 +317,12 @@ Sudut garis bahu terhadap horizontal via `atan2`. Miring bila > 9°.
 
 | Minggu | Target | Keluaran |
 |--------|--------|----------|
-| 1 | Bring-up Jetson: JetPack, kamera jalan via OpenCV, MediaPipe Pose terinstal & mendeteksi (CPU) | Skeleton tergambar di Jetson |
-| 2 | Inti analisis Python (kalibrasi, tiga deteksi, smoothing, statistik) + Flask (MJPEG + WS) | Feedback real-time benar; terlihat di browser lokal |
-| 3 | UI HTML/JS rapi (disajikan Flask), PostgreSQL + riwayat, pengingat 20-20-20, pengujian | Aplikasi utuh & nyaman dipakai |
-| 4 | Autostart (opsional), laporan, dokumentasi, latihan demo, perbaikan | Dokumen submission + demo siap |
+| 1 | Bring-up Jetson/laptop: kamera via OpenCV, MediaPipe Pose Landmarker (Tasks, CPU) | Skeleton tergambar |
+| 2 | Inti `PunchAnalyzer` (kalibrasi, deteksi pukulan, target, skor) + Flask (MJPEG + WS) | Pukulan terdeteksi & dinilai benar |
+| 3 | UI arena rapi (overlay target, HUD, toast), PostgreSQL + riwayat + grafik, pengujian | Game utuh & enak dimainkan |
+| 4 | Mode tambahan (opsional), laporan, dokumentasi, latihan demo, perbaikan | Submission + demo siap |
 
-**Tonggak kritis:** akhir Minggu 1, kamera + MediaPipe harus sudah jalan di Jetson (ini bagian paling berisiko — kerjakan paling awal).
+**Tonggak kritis:** akhir Minggu 1, kamera + MediaPipe jalan di perangkat (paling berisiko).
 
 ---
 
@@ -283,21 +331,20 @@ Sudut garis bahu terhadap horizontal via `atan2`. Miring bila > 9°.
 | Peran | Tanggung jawab |
 |-------|----------------|
 | Jetson & deployment | Setup JetPack, kamera, instalasi MediaPipe, autostart, profil daya/termal |
-| Pipeline MediaPipe + OpenCV | Akuisisi frame, deteksi pose, gambar skeleton, MJPEG |
-| Logika analisis Python | `PostureAnalyzer`: kalibrasi, deteksi, smoothing, tuning ambang (kontribusi teknis terbesar) |
+| Pipeline MediaPipe + OpenCV | Akuisisi frame, Pose Landmarker (Tasks), skeleton, MJPEG |
+| Logika game Python | `PunchAnalyzer`: kalibrasi, deteksi pukulan, target, skor, tuning ambang (kontribusi teknis terbesar) |
 | Backend Flask + PostgreSQL | API, WebSocket, skema & query DB, pengujian |
-| Frontend (HTML/JS) + laporan | Halaman `index.html` + JS (live view, panel status, riwayat), integrasi, lab report, koordinasi demo |
-
-Catatan: kontribusi individu memengaruhi nilai individu — dokumentasikan pembagiannya.
+| Frontend (HTML/JS) + laporan | Arena + overlay target + HUD + statistik, integrasi, lab report, koordinasi demo |
 
 ---
 
 ## 17. Rencana Pengujian
 
-- **Unit test logika analisis:** beri pose palsu (tegak, menunduk, mata melebar, bahu miring) → pastikan status/peringatan benar.
-- **Uji fungsional:** tiap fitur F1–F10 diuji dengan skenario nyata di Jetson.
-- **Uji kalibrasi:** pengguna dengan tinggi/jarak berbeda → skor tetap adil.
-- **Uji performa Jetson:** ukur fps & suhu selama sesi panjang; pastikan tidak *throttling*/crash.
+- **Unit test logika game:** beri pose palsu (guard, terjulur cepat, terjulur pelan,
+  setengah, meleset) → pastikan pukulan sah/hit/miss/skor benar (lihat self-test `analysis.py`).
+- **Uji fungsional:** tiap fitur F1–F10 diuji dengan skenario nyata.
+- **Uji kalibrasi:** pemain dengan jangkauan berbeda → penilaian tetap adil.
+- **Uji performa:** ukur fps & suhu; pastikan pukulan cepat tertangkap.
 - **Uji jaringan:** akses UI dari perangkat lain di jaringan lokal.
 
 ---
@@ -306,58 +353,60 @@ Catatan: kontribusi individu memengaruhi nilai individu — dokumentasikan pemba
 
 | Risiko | Dampak | Mitigasi |
 |--------|--------|----------|
-| **GPU MediaPipe di Jetson sulit** (tak ada wheel GPU resmi, sering jatuh ke CPU) | Waktu terbuang mengejar GPU | **Jalankan di CPU** untuk MVP; GPU hanya jika sempat. Pakai model *lite* & resolusi sedang |
-| Instalasi MediaPipe di aarch64 gagal | Pipeline tak jalan | Coba `pip install mediapipe`; jika gagal untuk JetPack/Python kalian, pakai wheel komunitas aarch64 atau build dari source (lihat Bagian 19) |
-| fps rendah di CPU | Demo tersendat | Turunkan resolusi, proses tiap-N frame, gunakan `jetson_clocks` |
-| Termal *throttling* sesi panjang | Performa turun | Ventilasi/heatsink-fan; pantau suhu |
-| Kamera tak terdeteksi | Tidak ada input | Utamakan webcam USB; verifikasi dengan `v4l2-ctl --list-devices` |
-| Front camera tak melihat bungkuk samping sempurna | Akurasi terbatas | Pakai proksi (kepala turun) yang valid dari depan; jelaskan keterbatasan di laporan |
+| **fps rendah** melewatkan pukulan cepat | Hit tak terdeteksi | Resolusi sedang, model *lite*, analisis ~15 Hz, `jetson_clocks` |
+| **Ambiguitas kedalaman 2D** (pukulan lurus ke kamera) | Akurasi terbatas | Fokus pukulan ke zona layar (gerakan terlihat di 2D); jelaskan keterbatasan di laporan |
+| GPU MediaPipe di Jetson sulit | Waktu terbuang | **Jalankan di CPU**; GPU hanya jika sempat |
+| Instalasi MediaPipe di aarch64 gagal | Pipeline tak jalan | Wheel komunitas / build dari source (§19) |
+| Tidak ada sensor impact | Tak bisa ukur tenaga | Posisikan sebagai latihan kecepatan/akurasi/reaksi, bukan tenaga |
 | Scope membengkak | Tidak selesai | Kunci MVP F1–F10 |
 
 ---
 
 ## 19. Panduan Deployment Jetson Orin Nano
 
-**Langkah ringkas (urutan disarankan):**
-1. **Flash JetPack** terbaru yang stabil untuk Orin Nano via NVIDIA SDK Manager; pastikan CUDA & OpenCV bawaan terpasang.
+1. **Flash JetPack** stabil untuk Orin Nano; pastikan CUDA & OpenCV bawaan.
 2. **Mode daya maksimal:** `sudo nvpmodel -m 0 && sudo jetson_clocks`.
-3. **Verifikasi kamera:** colok webcam USB → `v4l2-ctl --list-devices`; uji ambil frame dengan OpenCV.
-4. **Pasang MediaPipe (Python):**
-   - Coba dulu jalur termudah: `pip install mediapipe` (beberapa versi menyediakan wheel `linux_aarch64` yang berjalan di CPU).
-   - Jika tidak tersedia untuk kombinasi JetPack/Python kalian, gunakan **wheel aarch64 dari komunitas** (mis. repo PINTO0309 / jiuqiant / anion0278) atau **build dari source** mengikuti panduan Jetson. Catat: jalur GPU (delegate CUDA) rumit dan sering jatuh ke CPU — bukan target MVP.
-5. **Backend + frontend:** `pip install flask flask-sock psycopg2-binary opencv-python` (OpenCV mungkin sudah ada dari JetPack — jangan timpa jika sudah berfungsi). Flask sekaligus menyajikan `index.html` + aset statis (folder `templates/` & `static/`).
-6. **PostgreSQL:** `sudo apt install postgresql`; buat database & user; jalankan skema di Bagian 10.
-7. **Frontend:** cukup taruh `index.html` + JS/CSS di folder statis Flask — **tidak perlu Node/npm atau build**. Akses via alamat IP Jetson di browser.
-8. **Autostart (opsional, F13):** buat service `systemd` agar pipeline + Flask berjalan saat boot.
+3. **Verifikasi kamera:** `v4l2-ctl --list-devices`; uji ambil frame OpenCV.
+4. **Pasang MediaPipe (Python):** coba `pip install mediapipe`; bila gagal untuk
+   kombinasi JetPack/Python, pakai wheel aarch64 komunitas / build dari source.
+   Jalur GPU rumit — bukan target MVP.
+5. **Backend + frontend:** `pip install flask flask-sock psycopg2-binary python-dotenv`.
+   OpenCV mungkin sudah ada dari JetPack — jangan timpa. Frontend cukup taruh
+   `templates/` + `static/` (pustaka vendor lokal) — **tanpa Node/npm**.
+6. **Model:** salin `models/pose_landmarker_lite.task` ke perangkat.
+7. **PostgreSQL:** `sudo apt install postgresql`; buat DB & jalankan `schema.sql`.
+8. **Autostart (opsional, F14):** service `systemd` agar berjalan saat boot.
 
-**Catatan versi:** kombinasi JetPack ↔ versi Python ↔ versi MediaPipe sangat menentukan keberhasilan instalasi. Catat versi yang berhasil di laporan — ini bagian "environment" yang diminta dokumen tugas.
+**Catatan versi:** kombinasi JetPack ↔ Python ↔ MediaPipe menentukan keberhasilan.
+Catat versi yang berhasil di README — bagian "environment" yang diminta tugas.
 
 ---
 
 ## 20. Metrik Keberhasilan
 
-- Tiga deteksi postur berfungsi benar pada ≥ 90% skenario uji.
-- Berjalan stabil di Jetson sepanjang demo tanpa crash/throttling parah.
-- fps cukup untuk terasa real-time (≥ ~12 fps) dan umpan balik < 500 ms.
-- Riwayat sesi tersimpan di PostgreSQL & tampil benar di halaman web.
-- Pengguna percobaan bisa memakai tanpa penjelasan tambahan.
+- Deteksi pukulan sah benar pada ≥ 90% skenario uji (cepat-penuh dihitung, pelan/setengah tidak).
+- Hit/miss terhadap target tepat, kombo & skor konsisten.
+- fps cukup (≥ ~15) sehingga pukulan cepat tertangkap; umpan balik < 200 ms.
+- Riwayat sesi tersimpan di PostgreSQL & tampil benar (termasuk grafik tren).
+- Pemain percobaan bisa main tanpa penjelasan tambahan.
 
 ---
 
 ## 21. Pemetaan ke Requirement Tugas
 
-| Requirement Tugas | Cara Study Guardian memenuhinya |
+| Requirement Tugas | Cara Punch Trainer memenuhinya |
 |-------------------|-------------------------------|
-| Berbasis MediaPipe | Inti deteksi memakai MediaPipe Pose Landmarker (Python, on-device) |
-| Berjalan di perangkat embedded | Dijalankan di Jetson Orin Nano — sesuai contoh embedded di dokumen tugas |
-| Aplikasi utuh & mudah dipakai | Perangkat menyala → memantau; UI web sederhana dengan panduan |
-| Backend berbasis Python | Flask + seluruh deteksi & analisis di Python |
-| Arsitektur (separasi opsional) | Monolitik: Flask menyajikan UI + API + video dalam satu proses. Dokumen tugas tidak mewajibkan separasi — ini sah & lebih simpel |
-| User experience tinggi | Desain tenang, peringatan tidak mengganggu, autostart |
-| Inovasi | Pemrosesan edge on-device tanpa cloud (privasi); ambang relatif berbasis kalibrasi |
-| Tidak menyalin proyek | Logika & arsitektur dirancang sendiri, bukan klon repo |
-| Kualitas > kuantitas | Lingkup MVP dikunci, fokus eksekusi rapi |
+| Berbasis MediaPipe | Inti deteksi memakai MediaPipe Pose Landmarker (Tasks API, on-device) |
+| Berjalan di perangkat embedded | Dijalankan di Jetson Orin Nano — sesuai contoh embedded |
+| Aplikasi utuh & mudah dipakai | Nyala → kalibrasi → main; UI web dengan panduan & umpan balik instan |
+| Backend berbasis Python | Flask + seluruh deteksi & logika game di Python |
+| Arsitektur (separasi opsional) | Monolitik: Flask menyajikan UI + API + video dalam satu proses (sah & lebih simpel) |
+| User experience tinggi | Gamified: target, skor, kombo, toast, grafik progres |
+| Inovasi | Reflex/punch trainer edge on-device tanpa cloud; penilaian relatif berbasis kalibrasi |
+| Tidak menyalin proyek | Logika & arsitektur dirancang sendiri |
+| Kualitas > kuantitas | Lingkup MVP dikunci, eksekusi rapi |
 
 ---
 
-*Dokumen ini adalah PRD perencanaan Untuk submission akhir, isi konten relevan (fungsi, ide implementasi, tech stack, environment versi Jetson, pengujian, deployment).
+*Dokumen ini adalah PRD perencanaan. Untuk submission akhir, isi konten relevan
+(fungsi, ide implementasi, tech stack, environment versi Jetson, pengujian, deployment).*
