@@ -1,0 +1,16 @@
+# Study Guardian — dependensi Python (lihat CLAUDE.md §8 / PRD §19)
+# Catatan Jetson: OpenCV mungkin sudah terpasang dari JetPack — jangan timpa
+# jika sudah berfungsi. MediaPipe dijalankan di CPU untuk MVP (CLAUDE.md §9).
+
+flask
+flask-sock
+psycopg2-binary
+python-dotenv
+numpy<2
+# MediaPipe mensyaratkan opencv-contrib-python (menyediakan cv2, superset
+# opencv-python). Di-pin ke 4.9.0.80: versi ber-wheel YANG masih mengizinkan
+# numpy<2 (versi 4.12 memaksa numpy>=2 → bentrok dgn mediapipe yg butuh numpy 1).
+# Di Jetson, OpenCV dari JetPack — jangan pasang ini di sana (lihat CLAUDE.md §9).
+opencv-contrib-python==4.9.0.80
+# mediapipe di-pin: tanpa pin, pip "backtracking" (unduh puluhan versi) sangat lambat.
+mediapipe==0.10.14

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Study Guardian — Pemantau Postur Belajar</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/toastify.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body x-data="guardian()" x-init="init()">
+  <!-- Latar dekoratif lembut -->
+  <div class="bg-orbs" aria-hidden="true"><span></span><span></span><span></span></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">🪑</span>
+      <div>
+        <h1>Study Guardian</h1>
+        <p class="brand-sub">Pemantau postur belajar · on-device</p>
+      </div>
+    </div>
+    <span class="conn" :class="conn === 'on' ? 'conn--on' : 'conn--off'" x-cloak>
+      <i class="dot"></i>
+      <span x-text="conn === 'on' ? 'Terhubung' : 'Menghubungkan…'"></span>
+    </span>
+  </header>
+
+  <main class="layout">
+    <!-- ============ Kolom kiri: live view ============ -->
+    <section class="panel live">
+      <div class="video-wrap">
+        <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Live view"
+             @error="videoError = true" @load="videoError = false">
+
+        <div class="video-empty" x-show="videoError" x-cloak>
+          <span class="spinner"></span>
+          <p>Menyiapkan kamera…</p>
+        </div>
+
+        <!-- Badge status mengambang di atas video -->
+        <div class="status-badge" :class="statusClass" x-cloak>
+          <span class="status-pulse"></span>
+          <span x-text="statusText"></span>
+        </div>
+
+        <!-- Metrik langsung, overlay tipis di bawah video -->
+        <div class="metric-strip" x-cloak>
+          <div class="metric">
+            <span class="m-label">membungkuk</span>
+            <span class="m-value" x-text="fmt(metrics.head_ratio, 2)"></span>
+          </div>
+          <div class="metric">
+            <span class="m-label">jarak layar</span>
+            <span class="m-value" x-text="fmt(metrics.eye_width, 3)"></span>
+          </div>
+          <div class="metric">
+            <span class="m-label">kemiringan</span>
+            <span class="m-value" x-text="metrics.tilt_deg === null ? '–' : metrics.tilt_deg + '°'"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn--primary" @click="calibrate()" :disabled="calibrating">
+          <span x-show="!calibrating">Kalibrasi</span>
+          <span x-show="calibrating" x-cloak>Mengkalibrasi…</span>
+        </button>
+        <button class="btn btn--ghost" @click="endSession()">Akhiri Sesi</button>
+      </div>
+
+      <p class="hint">
+        <strong>1)</strong> Duduk tegak senyaman mungkin &nbsp;·&nbsp;
+        <strong>2)</strong> Tekan <em>Kalibrasi</em> untuk menetapkan postur ideal Anda.
+      </p>
+    </section>
+
+    <!-- ============ Kolom kanan: statistik & riwayat ============ -->
+    <aside class="side">
+      <!-- Skor besar -->
+      <div class="panel score-card">
+        <div class="score-ring" :style="scoreRingStyle" x-cloak>
+          <div class="score-inner">
+            <span class="score-num" x-text="stats.posture_score"></span>
+            <span class="score-lbl">Skor Postur</span>
+          </div>
+        </div>
+        <div class="score-meta">
+          <div class="meta-item">
+            <span class="meta-num" x-text="elapsedText"></span>
+            <span class="meta-lbl">Durasi sesi</span>
+          </div>
+          <div class="meta-divider"></div>
+          <div class="meta-item">
+            <span class="meta-num" x-text="totalEvents"></span>
+            <span class="meta-lbl">Total peringatan</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rincian event -->
+      <div class="panel">
+        <h2 class="panel-title">Rincian Event</h2>
+        <div class="event-grid" x-cloak>
+          <div class="event" :class="{ 'event--hot': flags.slouching }">
+            <span class="ev-ico">🪑</span>
+            <span class="ev-num" x-text="stats.slouch_events"></span>
+            <span class="ev-lbl">Membungkuk</span>
+          </div>
+          <div class="event" :class="{ 'event--hot': flags.too_close }">
+            <span class="ev-ico">🔍</span>
+            <span class="ev-num" x-text="stats.close_events"></span>
+            <span class="ev-lbl">Terlalu dekat</span>
+          </div>
+          <div class="event" :class="{ 'event--hot': flags.tilted }">
+            <span class="ev-ico">↔️</span>
+            <span class="ev-num" x-text="stats.tilt_events"></span>
+            <span class="ev-lbl">Miring</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Riwayat + grafik tren -->
+      <div class="panel">
+        <h2 class="panel-title">Tren Skor Antar-Sesi</h2>
+        <div class="chart-wrap" x-show="history.length" x-cloak>
+          <canvas id="trendChart"></canvas>
+        </div>
+        <p class="muted" x-show="!history.length" x-cloak>Belum ada sesi tersimpan.</p>
+
+        <ul class="history" x-cloak>
+          <template x-for="row in history" :key="row.id">
+            <li>
+              <span class="h-score" :class="scoreBadgeClass(row.posture_score)"
+                    x-text="row.posture_score ?? '–'"></span>
+              <div class="h-info">
+                <span class="h-when" x-text="histLabel(row.started_at)"></span>
+                <span class="h-detail"
+                      x-text="`${histDur(row.duration_sec)} · bungkuk ${row.slouch_events} / dekat ${row.close_events} / miring ${row.tilt_events}`"></span>
+              </div>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Pustaka (vendor lokal — aman offline). Urutan penting: util dulu,
+       app.js mendaftarkan komponen, Alpine paling akhir agar memicu init. -->
+  <script defer src="{{ url_for('static', filename='vendor/dayjs.min.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='vendor/toastify.min.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='vendor/alpine.min.js') }}"></script>
+</body>
+</html>
