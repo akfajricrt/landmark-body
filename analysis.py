@@ -35,17 +35,17 @@ from datetime import datetime, timezone
 # --------------------------------------------------------------------------
 # Ambang & konstanta game (boleh diubah lewat /api/settings)
 # --------------------------------------------------------------------------
-PUNCH_SPEED_MIN = 1.5      # kecepatan KELUAR pergelangan minimal (unit-layar/detik)
+PUNCH_SPEED_MIN = 1.3      # kecepatan pergelangan minimal (unit-layar/detik)
 PUNCH_EXTEND_FRAC = 0.70   # pukulan sah bila ekstensi >= 70% jangkauan (adaptif)
-REARM_FRAC = 0.55          # harus menarik tangan < 55% jangkauan untuk "isi ulang"
+REARM_FRAC = 0.45          # tarik tangan < 45% jangkauan untuk "isi ulang" (toleran untuk combo cepat)
 SPEED_SMOOTH = 2           # smoothing vektor kecepatan — 2 frame sudah cukup halus
-DEFAULT_REACH = 1.5        # jangkauan awal (extension penuh ≈ 1,5× lebar bahu)
+DEFAULT_REACH = 1.1        # jangkauan awal realistis (kebanyakan orang ≈ 1.0–1.3× lebar bahu)
 TARGET_RADIUS = 0.18       # radius zona target (koordinat ternormalisasi)
 SCORE_BASE = 100           # poin dasar per hit (dikali kombo)
 ASSUMED_SHOULDER_M = 0.40  # asumsi lebar bahu (m) untuk estimasi kecepatan m/s
 
 # Reach adaptif — ambang ekstensi menyesuaikan jangkauan nyata pemain.
-REACH_ADAPT = 0.25         # laju belajar reach tiap siklus julur-tarik (0..1)
+REACH_ADAPT = 0.35         # laju belajar reach tiap siklus julur-tarik (lebih cepat konvergen)
 MIN_REACH = 0.6            # batas bawah reach (cegah ambang runtuh)
 MAX_REACH = 3.0            # batas atas reach
 MIN_PEAK_FOR_ADAPT = 0.5   # puncak ekstensi minimal agar dipakai mengubah reach
@@ -402,14 +402,18 @@ class PunchAnalyzer:
                 self._cycle_peak[hand] = ext
                 self._armed[hand] = True
 
-            # 3) Picu pukulan: ter-armed, terjulur cukup, dan bergerak KELUAR cepat.
+            # 3) Picu pukulan: ter-armed, terjulur cukup, cepat, dan arah keluar.
+            # Cek kecepatan total (speed_mag) terpisah dari cek arah (outward_speed):
+            # - speed_mag >= speed_min  → memastikan gerakan cukup cepat (bukan lambat)
+            # - outward_speed > speed_min * 0.3 → memastikan arah keluar (toleran hook/cross
+            #   di mana komponen outward hanya ~60–70% kecepatan total)
             if (self._armed[hand] and self._pending[hand] is None
                     and ext >= self.extend_frac * self._reach_est[hand]
-                    and outward_speed >= self.speed_min):
+                    and speed_mag >= self.speed_min
+                    and outward_speed > self.speed_min * 0.3):
                 self._armed[hand] = False
-                # Fast-path: pukulan sangat cepat → anggap sudah di apex (stagnant=1)
-                # sehingga diselesaikan pada frame berikutnya tanpa menunggu APEX_WINDOW.
-                init_stagnant = (1 if outward_speed >= self.speed_min * FAST_PUNCH_MULTIPLIER
+                # Fast-path: pukulan sangat cepat → selesaikan pada frame berikutnya.
+                init_stagnant = (1 if speed_mag >= self.speed_min * FAST_PUNCH_MULTIPLIER
                                  else 0)
                 self._pending[hand] = {"start_t": now, "best_ext": ext,
                                        "best_wrist": wrist, "speed_ms": speed_ms,

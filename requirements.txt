@@ -4,8 +4,6 @@
 
 flask
 flask-sock
-psycopg2-binary
-python-dotenv
 numpy<2
 # MediaPipe mensyaratkan opencv-contrib-python (menyediakan cv2, superset
 # opencv-python). Di-pin ke 4.9.0.80: versi ber-wheel YANG masih mengizinkan

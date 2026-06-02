@@ -2,15 +2,14 @@
 app.py — Entrypoint Flask Study Guardian (Punch Trainer — game latihan tinju).
 
 Arsitektur monolitik: satu proses menangani semuanya.
-  GET  /                 -> index.html (UI HTML/JS)
-  GET  /video_feed       -> MJPEG (frame + skeleton)
-  WS   /ws               -> dorong feedback game tiap analisis
-  POST /api/calibrate    -> kalibrasi jangkauan dari frame saat ini
-  POST /api/session/end  -> tutup sesi & simpan ke PostgreSQL
-  GET  /api/history      -> daftar sesi terakhir
-  GET/PUT /api/settings  -> baca/ubah ambang game (disimpan ke DB)
+  GET  /              -> index.html (UI HTML/JS)
+  GET  /video_feed    -> MJPEG (frame + skeleton)
+  WS   /ws            -> dorong feedback game tiap analisis
+  POST /api/play      -> mulai bermain
+  POST /api/stop      -> berhenti bermain
+  GET/PUT /api/settings -> baca/ubah ambang game (in-memory, tidak persisten)
 
-Loop analisis berjalan di thread sendiri (~15 Hz): mengambil landmark dari
+Loop analisis berjalan di thread sendiri (~25 Hz): mengambil landmark dari
 camera.py, memanggil PunchAnalyzer.analyze(), menyimpan feedback terbaru yang
 lalu didorong ke semua klien WebSocket.
 """
@@ -23,7 +22,6 @@ import time
 from flask import Flask, Response, jsonify, render_template, request
 from flask_sock import Sock
 
-import db
 from analysis import PunchAnalyzer
 
 app = Flask(__name__)
@@ -129,14 +127,13 @@ def api_play():
 
 @app.route("/api/stop", methods=["POST"])
 def api_stop():
-    # Tombol Stop: hentikan permainan. TIDAK menyimpan riwayat.
+    # Tombol Stop: hentikan permainan.
     summary = analyzer.stats.to_dict()
     analyzer.stop()
     return jsonify({"ok": True, "summary": summary})
 
 
 def _settings_dict():
-    """Pengaturan saat ini (kunci sesuai kolom DB)."""
     return {
         "speed_min": analyzer.speed_min,
         "extend_frac": analyzer.extend_frac,
@@ -161,8 +158,7 @@ def api_settings():
     if request.method == "GET":
         return jsonify(_settings_dict())
     _apply_settings(request.get_json(silent=True) or {})
-    saved = db.save_settings(_settings_dict())
-    return jsonify({**_settings_dict(), "saved": saved})
+    return jsonify({**_settings_dict(), "saved": True})
 
 
 # ----------------------------------------------------------------------
@@ -175,16 +171,6 @@ def main():
     camera.start()
 
     threading.Thread(target=_analysis_loop, daemon=True).start()
-
-    if db.is_available():
-        print("[app] PostgreSQL terhubung — riwayat sesi akan disimpan.")
-        saved = db.get_settings()
-        if saved:
-            _apply_settings(saved)
-            print(f"[app] Pengaturan game dimuat dari DB: {saved}")
-    else:
-        print("[app] PostgreSQL TIDAK tersedia — aplikasi tetap jalan, "
-              "riwayat & pengaturan tidak tersimpan.")
 
     # threaded=True agar /video_feed, /ws, dan /api/* dilayani bersamaan.
     app.run(host="0.0.0.0", port=5000, threaded=True)

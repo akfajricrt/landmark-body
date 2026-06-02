@@ -2,8 +2,10 @@
 //
 // Tampilan saja — deteksi pukulan terjadi di Python (camera.py + analysis.py).
 //   • WebSocket native (/ws) untuk status game real-time (flask-sock = WS biasa).
-//   • Tombol Play (mulai) & Stop (berhenti, tanpa simpan riwayat).
+//   • Tombol Play (mulai) & Stop (berhenti).
 //   • Toast (Toastify) saat HIT/MISS, dipicu lewat perubahan last_event.seq.
+//   • Alert bar untuk pesan backend (tubuh tidak terdeteksi, dll.).
+//   • Metrics bar: kecepatan kiri/kanan + akurasi saat playing.
 
 function boxing() {
   return {
@@ -11,6 +13,7 @@ function boxing() {
     conn: "off",
     status: "idle",            // "idle" | "playing"
     metrics: { left: { ext: null, speed: null }, right: { ext: null, speed: null } },
+    alerts: [],
     target: null,
     stats: {
       score: 0, combo: 0, best_combo: 0, punches: 0, hits: 0, accuracy: 0,
@@ -42,7 +45,7 @@ function boxing() {
     },
     get targetStyle() {
       if (!this.target) return "display:none";
-      const w = this.target.r * 200; // diameter = 2r, sebagai % lebar arena
+      const w = this.target.r * 200; // diameter = 2r sebagai % lebar stage
       return `left:${this.target.x * 100}%; top:${this.target.y * 100}%; width:${w}%;`;
     },
 
@@ -51,7 +54,7 @@ function boxing() {
       const proto = location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${proto}://${location.host}/ws`);
       this._ws = ws;
-      ws.onopen = () => { this.conn = "on"; };
+      ws.onopen  = () => { this.conn = "on"; };
       ws.onmessage = (e) => {
         try { this.onFeedback(JSON.parse(e.data)); } catch (_) { /* abaikan */ }
       };
@@ -63,10 +66,11 @@ function boxing() {
     },
 
     onFeedback(fb) {
-      this.status = fb.status;
+      this.status  = fb.status;
       this.metrics = fb.metrics || this.metrics;
-      this.target = fb.target || null;
-      this.stats = fb.stats || this.stats;
+      this.target  = fb.target  || null;
+      this.alerts  = fb.alerts  || [];
+      this.stats   = fb.stats   || this.stats;
 
       // Toast hanya saat ada event baru (HIT/MISS) — pakai seq agar tak terlewat.
       const ev = fb.last_event;
@@ -110,13 +114,16 @@ function boxing() {
     },
 
     async stop() {
+      this.busy = true;
       try {
-        const res = await fetch("/api/stop", { method: "POST" });
+        const res  = await fetch("/api/stop", { method: "POST" });
         const data = await res.json();
-        const s = data.summary || {};
+        const s    = data.summary || {};
         this._toast(`⏹ Berhenti · Skor ${s.score ?? 0} · ${s.hits ?? 0} kena`, "miss");
       } catch (_) {
         this._toast("Tidak bisa menghubungi server.", "miss");
+      } finally {
+        this.busy = false;
       }
     },
   };

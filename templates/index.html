@@ -19,12 +19,17 @@
         <span class="spinner"></span><p>Menyiapkan kamera…</p>
       </div>
 
-      <!-- Petunjuk saat belum kalibrasi -->
-      <div class="coach" x-show="!videoError && status === 'need_calibration'" x-cloak>
+      <!-- Petunjuk saat idle (belum Play) -->
+      <div class="coach" x-show="!videoError && status === 'idle'" x-cloak>
         <div class="coach-card">
           <p class="coach-1">Siap bertanding?</p>
           <p class="coach-2">Tekan <b>▶ Play</b> untuk mulai</p>
         </div>
+      </div>
+
+      <!-- Alert backend: tubuh tidak terdeteksi, dll. -->
+      <div class="alert-bar" x-show="alerts.length > 0 && status === 'playing'" x-cloak>
+        <span x-text="alerts[0]"></span>
       </div>
 
       <!-- HUD: skor / kombo / waktu -->
@@ -41,6 +46,21 @@
         <span class="status-pulse"></span><span x-text="statusText"></span>
       </div>
 
+      <!-- Metrik kecepatan & ekstensi (tampil saat playing) -->
+      <div class="metrics-bar" x-show="status === 'playing'" x-cloak>
+        <span class="metric-item">
+          L <b x-text="metrics.left.speed !== null ? metrics.left.speed + ' m/s' : '–'"></b>
+        </span>
+        <span class="metric-sep">|</span>
+        <span class="metric-item">
+          R <b x-text="metrics.right.speed !== null ? metrics.right.speed + ' m/s' : '–'"></b>
+        </span>
+        <span class="metric-sep">|</span>
+        <span class="metric-item">
+          Akurasi <b x-text="stats.accuracy + '%'"></b>
+        </span>
+      </div>
+
       <!-- Target -->
       <div class="target" x-show="target" :style="targetStyle" x-cloak>
         <span class="target-ring"></span>
@@ -48,18 +68,17 @@
       </div>
     </div>
 
-    <!-- Hanya dua tombol -->
+    <!-- Tombol Play & Stop -->
     <div class="controls">
       <button class="btn btn--primary" @click="play()" :disabled="busy">
         <span x-show="!busy">▶ Play</span>
         <span x-show="busy" x-cloak>Menyiapkan…</span>
       </button>
-      <button class="btn btn--ghost" @click="stop()">⏹ Stop</button>
+      <button class="btn btn--ghost" @click="stop()" :disabled="busy">⏹ Stop</button>
     </div>
   </div>
 
   <script defer src="{{ url_for('static', filename='vendor/dayjs.min.js') }}"></script>
-  <script defer src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
   <script defer src="{{ url_for('static', filename='vendor/toastify.min.js') }}"></script>
   <script defer src="{{ url_for('static', filename='app.js') }}"></script>
   <script defer src="{{ url_for('static', filename='vendor/alpine.min.js') }}"></script>

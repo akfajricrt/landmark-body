@@ -90,6 +90,31 @@ body {
   50% { transform: scale(1.08); opacity: 1; }
 }
 
+/* ---------------- Alert bar (pesan backend) ---------------- */
+.alert-bar {
+  position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+  background: rgba(226, 59, 78, 0.88); backdrop-filter: blur(8px);
+  color: #fff; font-weight: 700; font-size: 0.88rem;
+  padding: 10px 20px; border-radius: 999px; z-index: 4;
+  text-align: center; white-space: nowrap;
+  animation: fadeInUp 0.3s ease;
+}
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ---------------- Metrics bar (kecepatan + akurasi) ---------------- */
+.metrics-bar {
+  position: absolute; bottom: 95px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(20, 17, 16, 0.55); backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.08); border-radius: 999px;
+  padding: 7px 18px; z-index: 3; font-size: 0.82rem; color: rgba(255,255,255,0.75);
+}
+.metrics-bar b { color: #fff; font-variant-numeric: tabular-nums; }
+.metric-sep { opacity: 0.3; }
+
 /* ---------------- Tombol Play / Stop ---------------- */
 .controls {
   position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);

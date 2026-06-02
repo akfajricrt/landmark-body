@@ -52,7 +52,7 @@ Aturan penting:
 | Kamera + frame | OpenCV (`opencv-contrib-python`) | webcam USB diutamakan |
 | Deteksi | `mediapipe` **Tasks API** (`PoseLandmarker`, model **lite**) | indeks landmark di §6 |
 | Server + UI | **Flask** + `flask-sock` | satu server menyajikan UI & API |
-| Database | **PostgreSQL** (`psycopg2-binary`) | skema di §7 |
+| Database | ~~PostgreSQL~~ **dihapus** | tidak dipakai; settings in-memory |
 | Frontend | **HTML + JS polos** + Alpine.js · Chart.js · Toastify · Day.js (vendor lokal) | folder `templates/` & `static/`, tanpa build |
 
 Frontend memakai pustaka ringan **vendor lokal** di `static/vendor/` (aman
@@ -74,8 +74,6 @@ guardian/
 ├── app.py                # entrypoint Flask: route, /video_feed, /ws, /api/*
 ├── camera.py             # loop kamera + MediaPipe Pose Landmarker (Tasks); frame + landmarks
 ├── analysis.py           # PunchAnalyzer (deteksi pukulan, target, skor) — punya self-test
-├── db.py                 # koneksi PostgreSQL + query sesi & settings
-├── schema.sql            # DDL tabel (lihat §7)
 ├── models/
 │   └── pose_landmarker_lite.task   # model MediaPipe (vendor lokal, ~5,5 MB)
 ├── templates/
@@ -199,11 +197,7 @@ avg_reaction_ms`. Saat menyimpan, `duration_sec ← elapsed_sec`; `combo`,
 
 ```bash
 # instalasi (lihat README/PANDUAN untuk venv Python 3.10)
-pip install -r requirements.txt          # flask, flask-sock, psycopg2-binary, python-dotenv, numpy, opencv-contrib-python, mediapipe
-
-# database
-createdb study_guardian
-psql -d study_guardian -f schema.sql
+pip install -r requirements.txt          # flask, flask-sock, numpy, opencv-contrib-python, mediapipe
 
 # jalankan (dev)
 python app.py                            # buka http://<IP>:5000
@@ -243,9 +237,9 @@ python analysis.py                       # self-test PunchAnalyzer di blok __mai
 ## 11. Urutan pengerjaan (status saat ini)
 
 1. **[x]** `camera.py`: kamera → MediaPipe Pose Landmarker (Tasks, CPU) → skeleton.
-2. **[x]** `analysis.py`: `PunchAnalyzer` — deteksi pukulan, target, skor. Self-test 19/19.
-3. **[x]** `app.py`: Flask + `/video_feed` + `/ws` + `/api/*`, loop analisis 15 Hz.
-4. **[x]** `db.py` + `schema.sql`: simpan & ambil riwayat + settings (PostgreSQL).
+2. **[x]** `analysis.py`: `PunchAnalyzer` — deteksi pukulan, target, skor. Self-test 22/22.
+3. **[x]** `app.py`: Flask + `/video_feed` + `/ws` + `/api/*`, loop analisis 25 Hz.
+4. **[dihapus]** ~~`db.py` + `schema.sql`~~ — tidak dipakai; settings cukup in-memory.
 5. **[x]** `templates/index.html` + `static/*`: arena, overlay target, HUD, statistik, riwayat.
 6. **[~]** Mode tambahan (Kombo, Timed Round), suara, autostart systemd — opsional, belum.
 
