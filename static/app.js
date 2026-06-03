@@ -28,8 +28,12 @@ function boxing() {
     levels: ["mudah", "menengah", "sulit"],
     levelLabel: { mudah: "Mudah", menengah: "Menengah", sulit: "Sulit" },
 
+    // ---------------- suara ----------------
+    soundOn: true,
+
     _ws: null,
     _lastSeq: 0,
+    _audioCtx: null,
 
     // ---------------- lifecycle ----------------
     init() {
@@ -109,8 +113,10 @@ function boxing() {
       if (ev && ev.seq && ev.seq !== this._lastSeq) {
         this._lastSeq = ev.seq;
         if (ev.type === "hit") {
+          this._sfxHit(ev.combo);
           this._toast(`🥊 HIT! x${ev.combo} · ⚡${ev.speed} m/s · ${ev.reaction_ms}ms`, "hit");
         } else if (ev.type === "miss") {
+          this._sfxMiss();
           this._toast("✋ Meleset — kombo putus!", "miss");
         }
       }
@@ -131,12 +137,80 @@ function boxing() {
       }).showToast();
     },
 
+    // ---------------- suara (Web Audio API, disintesis — tanpa file) ----------
+    // AudioContext baru boleh berbunyi setelah gestur user (kebijakan autoplay
+    // browser), jadi diinisialisasi saat tombol Play ditekan.
+    _initAudio() {
+      if (!this._audioCtx) {
+        try {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          this._audioCtx = AC ? new AC() : null;
+        } catch (_) { this._audioCtx = null; }
+      }
+      if (this._audioCtx && this._audioCtx.state === "suspended") {
+        this._audioCtx.resume();
+      }
+    },
+
+    toggleSound() {
+      this.soundOn = !this.soundOn;
+      if (this.soundOn) { this._initAudio(); this._blip(880, 1100, 0.1, 0.35, "square"); }
+    },
+
+    // Nada melengsing (oscillator) — frekuensi awal→akhir dengan envelope cepat.
+    _blip(fStart, fEnd, dur, gain, type = "sine") {
+      const ctx = this._audioCtx;
+      if (!ctx || !this.soundOn) return;
+      const t = ctx.currentTime;
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = type;
+      o.frequency.setValueAtTime(fStart, t);
+      o.frequency.exponentialRampToValueAtTime(Math.max(1, fEnd), t + dur);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(gain, t + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g).connect(ctx.destination);
+      o.start(t); o.stop(t + dur + 0.02);
+    },
+
+    // Letupan derau ter-filter → kesan "impact" kepalan.
+    _noise(dur, gain, freq) {
+      const ctx = this._audioCtx;
+      if (!ctx || !this.soundOn) return;
+      const t = ctx.currentTime;
+      const len = Math.floor(ctx.sampleRate * dur);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource(); src.buffer = buf;
+      const bp = ctx.createBiquadFilter(); bp.type = "bandpass";
+      bp.frequency.value = freq; bp.Q.value = 0.8;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(gain, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(bp).connect(g).connect(ctx.destination);
+      src.start(t); src.stop(t + dur);
+    },
+
+    // HIT: letupan impact + dentum rendah; nada naik seiring kombo.
+    _sfxHit(combo) {
+      this._noise(0.07, 0.45, 1300);
+      const base = 200 + Math.min(combo || 1, 10) * 22;
+      this._blip(base, base * 0.5, 0.18, 0.5, "sine");
+    },
+    // MISS: dentum tumpul menurun.
+    _sfxMiss() { this._blip(150, 70, 0.22, 0.3, "sawtooth"); },
+    // Mulai: dentang naik dua nada.
+    _sfxStart() { this._blip(620, 880, 0.16, 0.4, "square"); },
+
     // ---------------- aksi REST ----------------
     async play() {
       this.busy = true;
       this._lastSeq = 0;
+      this._initAudio();   // gestur user → boleh memutar suara
       try {
         await fetch("/api/play", { method: "POST" });
+        this._sfxStart();
         this._toast("🔔 Mulai — tinju targetnya!", "hit");
       } catch (_) {
         this._toast("Tidak bisa menghubungi server.", "miss");

@@ -71,6 +71,18 @@ body {
   box-shadow: 0 8px 24px rgba(0,0,0,0.25);
 }
 .status-badge .status-pulse { width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+
+/* ---------------- Tombol suara ---------------- */
+.sound-btn {
+  position: absolute; top: 18px; right: 18px; z-index: 4;
+  width: 44px; height: 44px; border-radius: 999px; cursor: pointer;
+  font-size: 1.1rem; line-height: 1; color: #fff;
+  background: rgba(20, 17, 16, 0.55); backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.12);
+  transition: background 0.15s, transform 0.08s;
+}
+.sound-btn:hover { background: rgba(255,255,255,0.12); }
+.sound-btn:active { transform: scale(0.94); }
 .status-badge.is-good { background: rgba(95, 161, 122, 0.92); }
 .status-badge.is-calib { background: rgba(138, 147, 166, 0.92); }
 

@@ -46,6 +46,11 @@
         <span class="status-pulse"></span><span x-text="statusText"></span>
       </div>
 
+      <!-- Tombol suara on/off -->
+      <button class="sound-btn" @click="toggleSound()" x-cloak
+              :title="soundOn ? 'Suara: nyala' : 'Suara: mati'"
+              x-text="soundOn ? '🔊' : '🔇'"></button>
+
       <!-- Metrik kecepatan & ekstensi (tampil saat playing) -->
       <div class="metrics-bar" x-show="status === 'playing'" x-cloak>
         <span class="metric-item">
