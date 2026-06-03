@@ -22,7 +22,7 @@ import time
 from flask import Flask, Response, jsonify, render_template, request
 from flask_sock import Sock
 
-from analysis import PunchAnalyzer
+from analysis import DIFFICULTY, PunchAnalyzer
 
 app = Flask(__name__)
 sock = Sock(app)
@@ -138,6 +138,8 @@ def _settings_dict():
         "speed_min": analyzer.speed_min,
         "extend_frac": analyzer.extend_frac,
         "target_radius": analyzer.target_radius,
+        "difficulty": analyzer.difficulty,
+        "levels": list(DIFFICULTY.keys()),   # untuk pilihan di UI
     }
 
 
@@ -145,6 +147,9 @@ def _apply_settings(d):
     """Terapkan dict pengaturan ke analyzer (abaikan kunci None/absen)."""
     if not d:
         return
+    # Level diterapkan dulu: ia menyetel speed_min & ukuran target sesuai preset.
+    if d.get("difficulty") is not None:
+        analyzer.set_difficulty(d["difficulty"])
     if d.get("speed_min") is not None:
         analyzer.speed_min = float(d["speed_min"])
     if d.get("extend_frac") is not None:

@@ -23,12 +23,44 @@ function boxing() {
     busy: false,
     videoError: false,
 
+    // ---------------- level kesulitan ----------------
+    difficulty: "menengah",
+    levels: ["mudah", "menengah", "sulit"],
+    levelLabel: { mudah: "Mudah", menengah: "Menengah", sulit: "Sulit" },
+
     _ws: null,
     _lastSeq: 0,
 
     // ---------------- lifecycle ----------------
     init() {
+      this.loadSettings();
       this.connectWS();
+    },
+
+    async loadSettings() {
+      try {
+        const res = await fetch("/api/settings");
+        const s = await res.json();
+        if (s.difficulty) this.difficulty = s.difficulty;
+        if (Array.isArray(s.levels) && s.levels.length) this.levels = s.levels;
+      } catch (_) { /* pakai default */ }
+    },
+
+    async setDifficulty(level) {
+      if (level === this.difficulty) return;
+      const prev = this.difficulty;
+      this.difficulty = level;   // optimistik
+      try {
+        await fetch("/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ difficulty: level }),
+        });
+        this._toast(`Level: ${this.levelLabel[level] || level}`, "hit");
+      } catch (_) {
+        this.difficulty = prev;   // gagal → kembalikan
+        this._toast("Gagal mengubah level.", "miss");
+      }
     },
 
     // ---------------- computed ----------------

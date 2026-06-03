@@ -106,7 +106,7 @@ body {
 
 /* ---------------- Metrics bar (kecepatan + akurasi) ---------------- */
 .metrics-bar {
-  position: absolute; bottom: 95px; left: 50%; transform: translateX(-50%);
+  position: absolute; bottom: 150px; left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 10px;
   background: rgba(20, 17, 16, 0.55); backdrop-filter: blur(10px);
   border: 1px solid rgba(255,255,255,0.08); border-radius: 999px;
@@ -138,7 +138,29 @@ body {
 }
 .btn--ghost:hover { border-color: rgba(255,255,255,0.4); }
 
+/* ---------------- Pemilih level kesulitan ---------------- */
+.levels {
+  position: fixed; bottom: 92px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 8px; z-index: 5;
+  padding: 5px; border-radius: 14px;
+  background: rgba(20, 17, 16, 0.55); backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.level-btn {
+  min-width: 84px; padding: 8px 14px; border: none; border-radius: 10px;
+  font-size: 0.9rem; font-weight: 700; cursor: pointer;
+  color: rgba(255,255,255,0.7); background: transparent;
+  transition: background 0.15s, color 0.15s;
+}
+.level-btn:hover:not(:disabled) { color: #fff; background: rgba(255,255,255,0.08); }
+.level-btn.on {
+  color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 6px 16px -6px rgba(226, 59, 78, 0.7);
+}
+.level-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
 @media (max-width: 520px) {
   .btn { min-width: 120px; padding: 13px 20px; font-size: 1rem; }
   .hud-item { min-width: 70px; padding: 8px 12px; }
+  .level-btn { min-width: 68px; padding: 7px 10px; font-size: 0.82rem; }
 }

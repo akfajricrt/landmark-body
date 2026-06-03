@@ -68,6 +68,15 @@
       </div>
     </div>
 
+    <!-- Pemilih level kesulitan -->
+    <div class="levels" x-cloak>
+      <template x-for="lv in levels" :key="lv">
+        <button class="level-btn" :class="{ 'on': difficulty === lv }"
+                @click="setDifficulty(lv)" :disabled="busy"
+                x-text="levelLabel[lv] || lv"></button>
+      </template>
+    </div>
+
     <!-- Tombol Play & Stop -->
     <div class="controls">
       <button class="btn btn--primary" @click="play()" :disabled="busy">

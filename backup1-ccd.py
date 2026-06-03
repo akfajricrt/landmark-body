@@ -66,26 +66,6 @@ APEX_STAGNANT = 1          # 1 frame tanpa puncak baru → sudah di apex
 # Pukulan dengan kecepatan sangat tinggi langsung diselesaikan di frame berikutnya.
 FAST_PUNCH_MULTIPLIER = 2.5  # speed_mag >= speed_min * ini → fast-path
 
-# --------------------------------------------------------------------------
-# Tingkat kesulitan — tiap level mengubah cara hit-test, ukuran target, dan
-# ambang kecepatan minimal.
-#   hit_mode "sweep" → Continuous Collision Detection (sapu LINTASAN PENUH):
-#       seluruh jejak pergelangan guard→apex diuji; ayunan yang sekadar melintas
-#       target tetap dihitung → PEMAAF (level Mudah).
-#   hit_mode "apex"  → hit dinilai dari POSISI KEPALAN MENDARAT (titik apex):
-#       pemain harus benar-benar membidik & mendaratkan kepalan → MENANTANG.
-# --------------------------------------------------------------------------
-DIFFICULTY = {
-    "mudah":    {"hit_mode": "sweep", "radius_factor": 1.30, "speed_min": 0.7},
-    "menengah": {"hit_mode": "apex",  "radius_factor": 1.00, "speed_min": 1.0},
-    "sulit":    {"hit_mode": "apex",  "radius_factor": 0.70, "speed_min": 1.4},
-}
-DEFAULT_DIFFICULTY = "menengah"
-
-# Jejak pergelangan untuk CCD lintasan penuh (level Mudah). Frame ramp-up
-# (sebelum pemicu) ikut di-seed agar onset pukulan dari guard tertangkap.
-TRAIL_HISTORY = 6
-
 # Sudut siku — deteksi tinju lurus ke depan (arah kamera).
 # Tinju ke depan: x,y pergelangan hampir tidak berubah, tapi siku meluruskan.
 # ELBOW_STRAIGHT: siku ≥ ini dianggap lengan terjulur (bypass gate arah 2D).
@@ -262,13 +242,9 @@ class PunchAnalyzer:
 
     def __init__(self):
         # Ambang per-instance (bisa diubah lewat /api/settings)
+        self.speed_min = PUNCH_SPEED_MIN
         self.extend_frac = PUNCH_EXTEND_FRAC
         self.target_radius = TARGET_RADIUS
-
-        # Tingkat kesulitan menentukan hit_mode, ukuran target & speed_min.
-        self.difficulty = DEFAULT_DIFFICULTY
-        self._cfg = DIFFICULTY[DEFAULT_DIFFICULTY]
-        self.speed_min = self._cfg["speed_min"]
 
         self.stats = PunchStats()
         self.started_at = datetime.now(timezone.utc)
@@ -290,8 +266,6 @@ class PunchAnalyzer:
         self._cycle_peak = {"left": 0.0, "right": 0.0}
         self._filt = {"left": _WristFilter(), "right": _WristFilter()}
         self._prev_wrist = {"left": None, "right": None}   # pergelangan ter-filter
-        self._wrist_hist = {"left": deque(maxlen=TRAIL_HISTORY),  # jejak (mode sweep)
-                            "right": deque(maxlen=TRAIL_HISTORY)}
         self._vel_buf = {"left": deque(maxlen=SPEED_SMOOTH),
                          "right": deque(maxlen=SPEED_SMOOTH)}
         self._pending = {"left": None, "right": None}      # pukulan menunggu apex
@@ -322,19 +296,6 @@ class PunchAnalyzer:
         """Hentikan permainan (tombol Stop). Tidak menyimpan apa pun."""
         self.playing = False
         self.active_target = None
-
-    def set_difficulty(self, level):
-        """Ubah tingkat kesulitan ('mudah' | 'menengah' | 'sulit'). Menyetel
-        hit_mode, ukuran target & speed_min. Mengembalikan True bila valid."""
-        if level not in DIFFICULTY:
-            return False
-        self.difficulty = level
-        self._cfg = DIFFICULTY[level]
-        self.speed_min = self._cfg["speed_min"]
-        # Bila target sedang aktif, segarkan radiusnya ke faktor level baru.
-        if self.active_target is not None:
-            self.active_target["r"] = self.target_radius * self._cfg["radius_factor"]
-        return True
 
     # ------------------------------------------------------------------
     def _visible(self, landmarks, idx_iterable):
@@ -374,7 +335,7 @@ class PunchAnalyzer:
                    or z["id"] != self.active_target["id"]]
         z = random.choice(choices)
         self.active_target = {"id": z["id"], "x": z["x"], "y": z["y"],
-                              "r": self.target_radius * self._cfg["radius_factor"]}
+                              "r": self.target_radius}
         self._target_spawn = time.monotonic()
 
     def _register_event(self, etype, hand, speed_ms, reaction_ms):
@@ -439,7 +400,6 @@ class PunchAnalyzer:
                     (wrist.z - prev.z) / dt * Z_WEIGHT,  # z tertimbang
                 ))
             self._prev_wrist[hand] = wrist
-            self._wrist_hist[hand].append(wrist)   # jejak untuk mode sweep (Mudah)
 
             if self._vel_buf[hand]:
                 vx = sum(v[0] for v in self._vel_buf[hand]) / len(self._vel_buf[hand])
@@ -469,10 +429,9 @@ class PunchAnalyzer:
             self._cycle_peak[hand] = max(self._cycle_peak[hand], ext)
             reach = self._reach_est[hand]
 
-            # 1) Pukulan menunggu apex → lacak titik kepalan terjauh + jejak, selesaikan.
+            # 1) Pukulan menunggu apex → lacak titik kepalan terjauh, lalu selesaikan.
             pend = self._pending[hand]
             if pend is not None:
-                pend["trail"].append(wrist)   # jejak lintasan (dipakai mode sweep)
                 new_peak = ext > pend["best_ext"] + APEX_EPS
                 if ext > pend["best_ext"]:
                     pend["best_ext"] = ext
@@ -486,7 +445,7 @@ class PunchAnalyzer:
                            or ext < pend["best_ext"] - APEX_DROP
                            or (now - pend["start_t"]) >= APEX_WINDOW)
                 if at_apex:
-                    resolved.append((hand, pend["best_wrist"], pend["trail"], pend["speed_ms"]))
+                    resolved.append((hand, pend["best_wrist"], pend["speed_ms"]))
                     self._pending[hand] = None
 
             # 2) Isi ulang saat tangan ditarik + reach belajar dari siklus ini.
@@ -509,18 +468,16 @@ class PunchAnalyzer:
                     and dir_ok):
                 self._armed[hand] = False
                 init_stagnant = 0
-                # Seed jejak dari history ramp-up (onset→pemicu) untuk mode sweep.
-                trail = list(self._wrist_hist[hand]) or [wrist]
                 self._pending[hand] = {"start_t": now, "best_ext": ext,
-                                       "best_wrist": wrist, "trail": trail,
-                                       "speed_ms": speed_ms, "stagnant": init_stagnant}
+                                       "best_wrist": wrist, "speed_ms": speed_ms,
+                                       "stagnant": init_stagnant}
 
         if self.active_target is None:
             self._spawn_target()
 
         # Satu pukulan per frame: ambil yang tercepat bila dua tangan bersamaan.
         if resolved:
-            resolved.sort(key=lambda r: r[3], reverse=True)  # tercepat dulu (speed_ms)
+            resolved.sort(key=lambda r: r[2], reverse=True)  # tercepat dulu (speed_ms)
             self._resolve_punch(*resolved[0], now=now)
 
         return self._feedback("playing", metrics, [])
@@ -531,65 +488,30 @@ class PunchAnalyzer:
         memakai puncak terakhir agar pukulan tak hilang."""
         self._filt[hand].reset()
         self._prev_wrist[hand] = None
-        self._wrist_hist[hand].clear()
         self._vel_buf[hand].clear()
         pend = self._pending[hand]
         if pend is not None:
             now = time.monotonic()
             self._pending[hand] = None
-            self._resolve_punch(hand, pend["best_wrist"], pend["trail"], pend["speed_ms"], now=now)
+            self._resolve_punch(hand, pend["best_wrist"], pend["speed_ms"], now=now)
 
     def _drop_all_hands(self):
         for hand in HANDS:
             self._drop_hand(hand)
 
-    @staticmethod
-    def _apex_hits_target(end_wrist, tgt):
-        """Hit-test PENDARATAN: jarak titik kepalan apex ke pusat target <= radius.
-        Aspek rasio frame diterapkan pada sumbu Y agar lingkaran tak lonjong."""
-        dx = end_wrist.x - tgt["x"]
-        dy = (end_wrist.y - tgt["y"]) * FRAME_ASPECT
-        return math.hypot(dx, dy) <= tgt["r"]
-
-    @staticmethod
-    def _trail_hits_target(trail, tgt):
-        """Hit-test CCD lintasan penuh (mode sweep / level Mudah): uji SETIAP
-        ruas garis pada jejak pukulan. Hit bila ada satu ruas yang jarak
-        terdekatnya ke pusat target <= radius — pemaaf terhadap ayunan melintas."""
-        cx, cy, r = tgt["x"], tgt["y"] * FRAME_ASPECT, tgt["r"]
-        pts = trail or []
-        if not pts:
-            return False
-        if len(pts) == 1:
-            return PunchAnalyzer._apex_hits_target(pts[0], tgt)
-        for a, b in zip(pts, list(pts)[1:]):
-            ax, ay = a.x, a.y * FRAME_ASPECT
-            bx, by = b.x, b.y * FRAME_ASPECT
-            abx, aby = bx - ax, by - ay
-            ab_sq = abx * abx + aby * aby
-            if ab_sq < 1e-9:
-                dist = math.hypot(cx - ax, cy - ay)
-            else:
-                t = max(0.0, min(1.0, ((cx - ax) * abx + (cy - ay) * aby) / ab_sq))
-                dist = math.hypot(cx - (ax + t * abx), cy - (ay + t * aby))
-            if dist <= r:
-                return True
-        return False
-
-    def _resolve_punch(self, hand, end_wrist, trail, speed_ms, now):
-        """Hitung satu pukulan sah: hit/miss sesuai hit_mode level aktif
-        (sweep=CCD lintasan penuh untuk Mudah; apex=pendaratan kepalan untuk
-        Menengah/Sulit), lalu skor & kombo."""
+    def _resolve_punch(self, hand, end_wrist, speed_ms, now):
+        """Hitung satu pukulan sah: hit/miss dari POSISI KEPALAN MENDARAT
+        (titik apex), lalu skor & kombo. Aspek rasio frame diterapkan pada
+        sumbu Y agar lingkaran target tak lonjong."""
         self.stats.punches += 1
         self.stats._speeds.append(speed_ms)
         tgt = self.active_target
 
         hit = False
         if tgt is not None:
-            if self._cfg["hit_mode"] == "sweep":
-                hit = self._trail_hits_target(trail, tgt)
-            else:
-                hit = self._apex_hits_target(end_wrist, tgt)
+            dx = end_wrist.x - tgt["x"]
+            dy = (end_wrist.y - tgt["y"]) * FRAME_ASPECT   # koreksi aspek pada Y
+            hit = math.hypot(dx, dy) <= tgt["r"]
 
         if hit:
             reaction_ms = int((now - self._target_spawn) * 1000)
@@ -748,35 +670,14 @@ if __name__ == "__main__":
     fb = feed(an, short)
     check("Reach adaptif -> pukulan pendek akhirnya terhitung", fb["stats"]["punches"] >= 1)
 
-    # 11b. Level MENENGAH (default, hit_mode apex): ayunan yang sekadar MELINTAS
-    # target (menuju sasaran lain) TIDAK dihitung. Jab ke y=0.90, target di
-    # y=0.62 — lintasan melewati target tapi kepalan mendarat jauh → MISS.
+    # 11b. Hit-test pendaratan: ayunan yang sekadar MELINTAS target (menuju
+    # sasaran lain) TIDAK dihitung. Pemain jab ke y=0.90, target di y=0.62 —
+    # lintasan melewati target tapi kepalan mendarat jauh → MISS (menantang).
     an = PunchAnalyzer(); an.start()
     an.active_target = {"id": "X", "x": 0.40, "y": 0.62, "r": 0.05}
     fb = feed(an, jab_left(0.90))
-    check("Menengah: ayunan melintas (mendarat jauh) -> miss",
+    check("Ayunan melintas (kepalan mendarat jauh) -> miss",
           fb["last_event"]["type"] == "miss")
-
-    # 11c. Level MUDAH (hit_mode sweep / CCD lintasan penuh): skenario sama
-    # dengan 11b, tapi lintasan menembus target → HIT (pemaaf).
-    an = PunchAnalyzer(); check("set_difficulty('mudah') valid", an.set_difficulty("mudah") is True)
-    an.start()
-    an.active_target = {"id": "X", "x": 0.40, "y": 0.62, "r": 0.05}
-    fb = feed(an, jab_left(0.90))
-    check("Mudah: lintasan menembus target -> hit", fb["last_event"]["type"] == "hit")
-
-    # 11d. set_difficulty: level tak dikenal ditolak; speed_min ikut berubah.
-    an = PunchAnalyzer()
-    check("set_difficulty('ngawur') ditolak", an.set_difficulty("ngawur") is False)
-    an.set_difficulty("sulit")
-    check("Sulit -> speed_min naik", an.speed_min == DIFFICULTY["sulit"]["speed_min"])
-
-    # 11e. radius_factor diterapkan saat target muncul (Sulit < Menengah < Mudah).
-    def spawn_r(level):
-        a = PunchAnalyzer(); a.set_difficulty(level); a.start()
-        return a.active_target["r"]
-    check("radius: sulit < menengah < mudah",
-          spawn_r("sulit") < spawn_r("menengah") < spawn_r("mudah"))
 
     # 11. Bentuk stats dict
     keys = {"elapsed_sec", "score", "combo", "best_combo", "punches", "hits",
